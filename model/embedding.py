@@ -1,4 +1,4 @@
-from spconv.pytorch import spconv
+import spconv.pytorch as spconv
 
 from .point import Point, PointModule, PointSequential
 

@@ -1,12 +1,14 @@
 import torch
 import torch.nn as nn
 import math
+import numpy as np
 from collections import OrderedDict
 
 from .layers import Swish
 from modules.flows import CondRealNVPFlow3DTriple
 
-class PriorNetwork(nn.Module):
+
+class PointPriorNetwork(nn.Module):
     def __init__(
         self,
         n_layers,
@@ -49,7 +51,6 @@ class PriorNetwork(nn.Module):
                 self.logvars[-1].weight.data.fill_(logvar_weight_std)
                 nn.init.constant_(self.logvars[-1].bias.data, logvar_bias)
 
-
     def forward(self, input):
         if self.n_layers > 0:
             features = self.features(input)
@@ -67,7 +68,7 @@ class PriorNetwork(nn.Module):
             return mus, logvars
 
 
-class WeightsNetwork(PriorNetwork):
+class WeightsNetwork(PointPriorNetwork):
     def forward(self, input):
         """
         Compute the weights for the decoder flows.
@@ -122,20 +123,14 @@ class DecBlock(nn.Module):
 
     
 class Decoder(nn.Module):
-    def __init__(
-        self,
-        n_flows,
-        depth,
-        feat_dim,
-        latent_dim,
-        weight_std=0.01
-    ):
+    def __init__(self, cfg, mode='training'):
         super().__init__()
-        self.n_flows = n_flows
-        self.depth = depth
-        self.feat_dim = feat_dim
-        self.latent_dim = latent_dim
-        self.weight_std = weight_std
+        self.n_flows = cfg.n_flows
+        self.depth = cfg.depth
+        self.feat_dim = cfg.feat_dim
+        self.latent_dim = cfg.latent_dim
+
+        self.mode = mode # default mode
 
         self.flow_depth, self.feat_dim = self._get_decoder_params(min_feat_dim=4)
 
@@ -150,11 +145,22 @@ class Decoder(nn.Module):
                     ])
         
         self.mixture_weights_enc = WeightsNetwork(
-            n_layers=3,
-            in_features=feat_dim,
-            latent_space_size=latent_dim,
+            n_layers=cfg.weight_n_layers,
+            in_features=self.feat_dim,
+            latent_space_size=self.latent_dim,
             mu_weight_std=0.001,
             mu_bias=0.0
+        )
+
+        self.point_prior = PointPriorNetwork(
+            n_layers=cfg.point_prior_n_layers,
+            in_features=self.latent_dim,
+            latent_dim=cfg.point_dim,
+            mu_weight_std=0.001,
+            mu_bias=0.0,
+            deterministic=False,
+            logvar_weight_std=0.01,
+            logvar_bias=0.0
         )
 
     def _get_decoder_params(self, min_feat_dim=4):
@@ -200,13 +206,63 @@ class Decoder(nn.Module):
             return self.mixture_weights_logits.unsqueeze(0).expand(latent_feats.shape[0], self.n_flows)
 
         return self.mixture_weights_enc(latent_feats)
+    
+    def reparametrize(self, mus, logvars):
+        """
+        Reparameterization trick to sample from the latent space.
+        Args:
+            mus: means of the flows
+            logvars: log variances of the flows
+        Returns:
+            samples: sampled features
+        """
+        std = torch.exp(0.5 * logvars)
+        eps = torch.randn_like(std)
+        
+        return eps.mul(std).add_(mus)
+    
+    def one_flow_decode(self, p, g, decoder, n_sampled_points):
+        """
+        Decode the input features using one flow decoder.
+        Args:
+            p: input features
+            g: additional conditioning features
+            decoder: one flow decoder
+            n_sampled_points: number of points to sample
+        Returns:
+            output: decoded features
+        """
+        output = {}
+        # for training/generation task
+        output['p_prior_mus'], output['p_prior_logvars'] = self.point_prior(g)
+        output['p_prior_mus'] = [output['p_prior_mus'].unsqueeze(2).expand(
+            g.shape[0], self.p_latent_space_size, n_sampled_points
+        )]
+        output['p_prior_logvars'] = [output['p_prior_logvars'].unsqueeze(2).expand(
+            g.shape[0], self.p_latent_space_size, n_sampled_points
+        )]
 
-    def decode(self, p, g, mode='direct', warmup=False):
+        if self.mode == 'training':
+            #train decoder flow
+            buf = decoder(p, g, mode='inverse')
+            output['p_prior_samples'] = buf[0] + [p]
+        else:
+            # for evaluation
+            output['p_prior_samples'] = [self.reparameterize(output['p_prior_mus'][0], output['p_prior_logvars'][0])]
+            buf = decoder(output['p_prior_samples'][0], g, mode='direct')
+            output['p_prior_samples'] += buf[0]
+        output['p_prior_mus'] += buf[1]
+        output['p_prior_logvars'] += buf[2]
+
+        return output
+
+    def decode(self, p, g, n_sampled_points, warmup=False, labeled_samples=False):
         """
         Decode the input features using the decoder flows.
         Args:
             p: input features
             g: additional conditioning features
+            n_sampled_points: number of points to sample
             mode: 'direct' or 'inverse'
             warmup: whether to use warmup mode
         Returns:
@@ -214,13 +270,45 @@ class Decoder(nn.Module):
             mus: means of the flows
             logvars: log variances of the flows
         """
-        mixture_weights = self.get_weights(p, warmup=warmup)
-        ps, mus, logvars = [], [], []
-        
-        for i, decoder in enumerate(self.decoder):
-            cur_p, cur_mus, cur_logvars = decoder(p, g, mode=mode)
-            ps.append(cur_p)
-            mus.append(cur_mus)
-            logvars.append(cur_logvars)
+        mixture_weights_logits = self.get_weights(p, warmup=warmup)
 
-        return ps, mus, logvars, mixture_weights
+        if self.mode == 'training':
+            n_sample_flow = [n_sampled_points for _ in range(self.n_flows)]
+
+        else:
+            #when evaluation, each time, only one shape is inputed
+            assert p.shape[0] == 1
+
+            #computes the probabilities of all flows
+            logits_exp = np.exp(mixture_weights_logits[0].detach().cpu().numpy())
+            probs = logits_exp / logits_exp.sum()
+
+            #for each flow, randomly choose certain number of points based on its probability
+            flows_idx = np.random.choice(range(self.n_flows), size=n_sampled_points, p=probs)
+
+            #masks designs the labels
+            masks = []
+            for t in range(self.n_flows):
+                mask = flows_idx == t
+                masks.append(mask.sum())
+
+            n_sample_flow = masks
+            
+        output = []
+        for i, decoder in enumerate(self.decoder):
+            #generate output parts for each flow decoder
+            one_decoder = self.one_flow_decode(p, g, decoder, n_sample_flow[i])
+            output.append(one_decoder)
+
+        if labeled_samples:     #when for evaluation
+            samples = torch.zeros_like((p))
+            labels = torch.zeros(p.size(0), p.size(2))
+            for t in range(self.n_components):
+                #for each point, find its labels (generated by which flow)
+                s = output[t]
+                mask = flows_idx == t
+                samples[:, :, mask] = s['p_prior_samples'][-1]
+                labels[:, mask] = t + 1
+            return samples, labels, mixture_weights_logits
+        else:
+            return output, mixture_weights_logits

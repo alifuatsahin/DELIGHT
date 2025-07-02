@@ -147,3 +147,86 @@ class CondRealNVPFlow3DTriple(nn.Module):
             p1, mu1, logvar1 = self.nvps[0](p2, g, mode=mode)
 
         return [p1, p2, p3], [mu1, mu2, mu3], [logvar1, logvar2, logvar3]
+    
+    
+class RealNVPFlow(nn.Module):
+    def __init__(self, n_features, g_n_features, weight_std=0.01, warp_inds=[0], eps=1e-6):
+        super(RealNVPFlow, self).__init__()
+        self.n_features = n_features
+        self.g_n_features = g_n_features
+        self.weight_std = weight_std
+        self.warp_inds = warp_inds
+        self.keep_inds = list(np.arange(g_n_features))
+        self.register_buffer('eps', torch.from_numpy(np.array([eps], dtype=np.float32)))
+        for ind in self.warp_inds:
+            self.keep_inds.remove(ind)
+
+        self.T_mu_0 = nn.Sequential(OrderedDict([
+            ('mu_mlp0', nn.Linear(len(self.keep_inds), self.n_features, bias=False)),
+            ('mu_mlp0_bn', nn.BatchNorm1d(self.n_features)),
+            ('mu_mlp0_swish', Swish()),
+            ('mu_mlp1', nn.Linear(self.n_features, len(self.warp_inds), bias=True))
+        ]))
+        with torch.no_grad():
+            self.T_mu_0[-1].weight.data.normal_(std=self.weight_std)
+            nn.init.constant_(self.T_mu_0[-1].bias.data, 0.0)
+
+        self.T_logvar_0 = nn.Sequential(OrderedDict([
+            ('logvar_mlp0', nn.Linear(len(self.keep_inds), self.n_features, bias=False)),
+            ('logvar_mlp0_bn', nn.BatchNorm1d(self.n_features)),
+            ('logvar_mlp0_swish', Swish()),
+            ('logvar_mlp1', nn.Linear(self.n_features, len(self.warp_inds), bias=True))
+        ]))
+        with torch.no_grad():
+            self.T_logvar_0[-1].weight.data.normal_(std=self.weight_std)
+            nn.init.constant_(self.T_logvar_0[-1].bias.data, 0.0)
+
+    def forward(self, g, mode='direct'):
+        logvar = torch.zeros_like(g)
+        mu = torch.zeros_like(g)
+
+        logvar[:, self.warp_inds] = torch.log(torch.add(
+            self.eps,
+            torch.exp(self.T_logvar_0(g[:, self.keep_inds].contiguous()))
+        ))
+        mu[:, self.warp_inds] = self.T_mu_0(g[:, self.keep_inds].contiguous())
+
+        logvar = logvar.contiguous()
+        mu = mu.contiguous()
+
+        if mode == 'direct':
+            g_out = torch.exp(0.5 * logvar) * g + mu
+        elif mode == 'inverse':
+            g_out = torch.exp(-0.5 * logvar) * (g - mu)
+
+        return g_out, mu, logvar
+
+
+class RealNVPFlowCouple(nn.Module):
+    def __init__(self, n_features, g_n_features, weight_std=0.01, pattern=0):
+        super(RealNVPFlowCouple, self).__init__()
+        self.n_features = n_features
+        self.g_n_features = g_n_features
+        self.weight_std = weight_std
+        self.pattern = pattern
+
+        if pattern == 0:
+            self.nvp1 = RealNVPFlow(n_features, g_n_features,
+                                    weight_std=weight_std, warp_inds=list(np.arange(g_n_features)[::2]))
+            self.nvp2 = RealNVPFlow(n_features, g_n_features,
+                                    weight_std=weight_std, warp_inds=list(np.arange(g_n_features)[1::2]))
+        elif pattern == 1:
+            self.nvp1 = RealNVPFlow(n_features, g_n_features,
+                                    weight_std=weight_std, warp_inds=list(np.arange(g_n_features)[:g_n_features // 2]))
+            self.nvp2 = RealNVPFlow(n_features, g_n_features,
+                                    weight_std=weight_std, warp_inds=list(np.arange(g_n_features)[g_n_features // 2:]))
+
+    def forward(self, g, mode='direct'):
+        if mode == 'direct':
+            g1, mu1, logvar1 = self.nvp1(g, mode=mode)
+            g2, mu2, logvar2 = self.nvp2(g1, mode=mode)
+        elif mode == 'inverse':
+            g2, mu2, logvar2 = self.nvp2(g, mode=mode)
+            g1, mu1, logvar1 = self.nvp1(g2, mode=mode)
+
+        return [g1, g2], [mu1, mu2], [logvar1, logvar2]
