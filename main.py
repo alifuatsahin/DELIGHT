@@ -1,14 +1,17 @@
-from model.point import Point
-
-from model.encoder import Encoder
+from model.vae import VAE
+from default_config import cfg
 
 import torch
 
 
 if __name__ == "__main__":
-    enc = Encoder()
-    input = torch.randn(3, 1024, 3)  # Example input tensor
+    model = VAE(cfg, mode='training')
+    model.eval()  # Set the model to evaluation mode
 
-    output = enc(input)
+    B = 2
+    input_dim = cfg.input_dim
+    N = 2048  # Number of points, can be adjusted as needed
 
-    print(output.feat)
+    p = torch.randn(B, input_dim, N)  # e.g., B=2, input_dim=3, N=2048
+    g = torch.randn(B, input_dim, N)  # or whatever your encoder expects
+    out = model(p, g)

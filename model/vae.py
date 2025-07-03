@@ -1,6 +1,7 @@
 from .encoder import Encoder
 from .decoder import Decoder
 from modules.flows import RealNVPFlowCouple
+from modules.layers import MLP
 
 import torch
 import torch.nn as nn
@@ -58,38 +59,49 @@ class LatentPriorFlow(nn.Module):
 class VAE(nn.Module):
     def __init__(self, cfg, mode='training'):
         super().__init__()
-        encoder_cfg = cfg.encoder
         decoder_cfg = cfg.decoder
 
-        self.encoder = Encoder(encoder_cfg, mode=mode)
+        self.mode = mode
+        self.latent_dim = cfg.latent_dim
+
+        self.encoder = Encoder(cfg.latent_dim, cfg.input_dim)
         self.decoder = Decoder(decoder_cfg, mode=mode)
 
         self.latent_prior = LatentPriorFlow(
             n_flows=decoder_cfg.n_flows,
             local_feature_dim=decoder_cfg.feat_dim,
             global_feature_dim=decoder_cfg.latent_dim,
-            weight_std=decoder_cfg.weight_std
+            weight_std=0.01
         )
 
-        self.latent_posterior = FeatureEncoder(
-            self.g_posterior_n_layers, self.pc_enc_n_features[-1],
-            self.g_latent_space_size, deterministic=False,
+        self.latent_posterior = MLP(
+            cfg.posterior_n_layers, self.encoder.out_features,
+            cfg.latent_dim, deterministic=False,
             mu_weight_std=0.0033, mu_bias=0.0,
             logvar_weight_std=0.033, logvar_bias=0.0
         )
 
+        self.latent_prior_mus = nn.Parameter(torch.Tensor(1, self.latent_dim))
+        self.latent_prior_logvars = nn.Parameter(torch.Tensor(1, self.latent_dim))
+    
+    def reparameterize(self, mean, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+
+        return mean + eps * std
+
     def encode(self, x):
         output = {}
         
-        output['g_prior_mus'] = [self.g0_prior_mus.expand(x.shape[0], self.g_latent_space_size)]
-        output['g_prior_logvars'] = [self.g0_prior_logvars.expand(x.shape[0], self.g_latent_space_size)]
+        output['g_prior_mus'] = [self.latent_prior_mus.expand(x.shape[0], self.latent_dim)]
+        output['g_prior_logvars'] = [self.latent_prior_logvars.expand(x.shape[0], self.latent_dim)]
 
         if self.mode == 'training':
             posterior_feats = self.encoder(x)
             latent = torch.max(posterior_feats, dim=2)[0]
 
             # get posterior distribution from point cloud features
-            output['g_posterior_mus'], output['g_posterior_logvars'] = self.g_posterior(latent)
+            output['g_posterior_mus'], output['g_posterior_logvars'] = self.latent_posterior(latent)
             output['g_posterior_samples'] = self.reparameterize(output['g_posterior_mus'],
                     output['g_posterior_logvars']) if self.mode == 'training' else output['g_posterior_mus']
 
@@ -114,29 +126,17 @@ class VAE(nn.Module):
 
         return output
     
-    def decode(self, output):
-        """
-        Decode the latent representation to point cloud.
-        Args:
-            output: dictionary containing the latent representation and other parameters
-        Returns:
-            point cloud generated from the latent representation
-        """
-        g = output['g_prior_samples'][-1]
-        p = self.decoder(g, mode=self.mode)
-        
-        return p
+    def forward(self, p, g, n_sampled_points=None, labeled_samples=False, warmup=False):
 
-    def forward(self, p, g, mode='direct'):
-        z_mean, z_logvar = self.encoder(p, g)
-        z = self.reparameterize(z_mean, z_logvar)
-        
-        if mode == 'direct':
-            return self.decoder(z, g, mode=mode), z_mean, z_logvar
-        elif mode == 'inverse':
-            return self.decoder(z, g, mode=mode), z_mean, z_logvar
+        sampled_cloud_size = p.shape[2] if n_sampled_points is None else n_sampled_points
 
-    def reparameterize(self, mean, logvar):
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mean + eps * std
+        output_encoder = self.encode(g)
+        
+        g_sample = output_encoder['g_posterior_samples'] if self.mode == 'training' else output_encoder['g_prior_samples'][-1]
+        
+        if labeled_samples:
+            samples, labels, mixture_weights_logits = self.decode(p, g_sample, sampled_cloud_size, labeled_samples, warmup)
+            return output_encoder, samples, labels, mixture_weights_logits
+        else:
+            output_decoder, mixture_weights_logits = self.decode(p, g_sample, sampled_cloud_size, labeled_samples, warmup)
+            return output_encoder, output_decoder, mixture_weights_logits

@@ -175,12 +175,12 @@ class PointModule(nn.Module):
     Base class for point modules, inheriting from nn.Module.
     This class is designed to be extended by specific point modules
     """
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self):
+        super().__init__()
 
 class PointSequential(PointModule):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__()
         if len(args) == 1 and isinstance(args[0], OrderedDict):
             for key, module in args[0].items():
                 self.add_module(key, module)

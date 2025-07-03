@@ -15,7 +15,7 @@ class Embedding(PointModule):
         self.embed_channels = embed_channels
 
         self.stem = PointSequential(
-            conv=spconv.SubMConv3d(
+            spconv.SubMConv3d(
                 in_channels,
                 embed_channels,
                 kernel_size=5,
