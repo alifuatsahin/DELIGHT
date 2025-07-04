@@ -3,7 +3,7 @@ import torch.nn as nn
 import numpy as np
 from collections import OrderedDict
 
-from model.layers import SharedDot, Swish
+from .layers import SharedDot, Swish
 
 class CondRealNVPFlow3D(nn.Module):
     def __init__(self, flow_feat_dim, latent_dim,
@@ -150,32 +150,32 @@ class CondRealNVPFlow3DTriple(nn.Module):
     
     
 class RealNVPFlow(nn.Module):
-    def __init__(self, n_features, g_n_features, weight_std=0.01, warp_inds=[0], eps=1e-6):
+    def __init__(self, flow_feat_dim, latent_dim, weight_std=0.01, warp_inds=[0], eps=1e-6):
         super(RealNVPFlow, self).__init__()
-        self.n_features = n_features
-        self.g_n_features = g_n_features
+        self.flow_feat_dim = flow_feat_dim
+        self.latent_dim = latent_dim
         self.weight_std = weight_std
         self.warp_inds = warp_inds
-        self.keep_inds = list(np.arange(g_n_features))
+        self.keep_inds = list(np.arange(latent_dim))
         self.register_buffer('eps', torch.from_numpy(np.array([eps], dtype=np.float32)))
         for ind in self.warp_inds:
             self.keep_inds.remove(ind)
 
         self.T_mu_0 = nn.Sequential(OrderedDict([
-            ('mu_mlp0', nn.Linear(len(self.keep_inds), self.n_features, bias=False)),
-            ('mu_mlp0_bn', nn.BatchNorm1d(self.n_features)),
+            ('mu_mlp0', nn.Linear(len(self.keep_inds), self.flow_feat_dim, bias=False)),
+            ('mu_mlp0_bn', nn.BatchNorm1d(self.flow_feat_dim)),
             ('mu_mlp0_swish', Swish()),
-            ('mu_mlp1', nn.Linear(self.n_features, len(self.warp_inds), bias=True))
+            ('mu_mlp1', nn.Linear(self.flow_feat_dim, len(self.warp_inds), bias=True))
         ]))
         with torch.no_grad():
             self.T_mu_0[-1].weight.data.normal_(std=self.weight_std)
             nn.init.constant_(self.T_mu_0[-1].bias.data, 0.0)
 
         self.T_logvar_0 = nn.Sequential(OrderedDict([
-            ('logvar_mlp0', nn.Linear(len(self.keep_inds), self.n_features, bias=False)),
-            ('logvar_mlp0_bn', nn.BatchNorm1d(self.n_features)),
+            ('logvar_mlp0', nn.Linear(len(self.keep_inds), self.flow_feat_dim, bias=False)),
+            ('logvar_mlp0_bn', nn.BatchNorm1d(self.flow_feat_dim)),
             ('logvar_mlp0_swish', Swish()),
-            ('logvar_mlp1', nn.Linear(self.n_features, len(self.warp_inds), bias=True))
+            ('logvar_mlp1', nn.Linear(self.flow_feat_dim, len(self.warp_inds), bias=True))
         ]))
         with torch.no_grad():
             self.T_logvar_0[-1].weight.data.normal_(std=self.weight_std)
@@ -203,23 +203,23 @@ class RealNVPFlow(nn.Module):
 
 
 class RealNVPFlowCouple(nn.Module):
-    def __init__(self, n_features, g_n_features, weight_std=0.01, pattern=0):
+    def __init__(self, flow_feat_dim, latent_dim, weight_std=0.01, pattern=0):
         super(RealNVPFlowCouple, self).__init__()
-        self.n_features = n_features
-        self.g_n_features = g_n_features
+        self.flow_feat_dim = flow_feat_dim
+        self.latent_dim = latent_dim
         self.weight_std = weight_std
         self.pattern = pattern
 
         if pattern == 0:
-            self.nvp1 = RealNVPFlow(n_features, g_n_features,
-                                    weight_std=weight_std, warp_inds=list(np.arange(g_n_features)[::2]))
-            self.nvp2 = RealNVPFlow(n_features, g_n_features,
-                                    weight_std=weight_std, warp_inds=list(np.arange(g_n_features)[1::2]))
+            self.nvp1 = RealNVPFlow(flow_feat_dim, latent_dim,
+                                    weight_std=weight_std, warp_inds=list(np.arange(latent_dim)[::2]))
+            self.nvp2 = RealNVPFlow(flow_feat_dim, latent_dim,
+                                    weight_std=weight_std, warp_inds=list(np.arange(latent_dim)[1::2]))
         elif pattern == 1:
-            self.nvp1 = RealNVPFlow(n_features, g_n_features,
-                                    weight_std=weight_std, warp_inds=list(np.arange(g_n_features)[:g_n_features // 2]))
-            self.nvp2 = RealNVPFlow(n_features, g_n_features,
-                                    weight_std=weight_std, warp_inds=list(np.arange(g_n_features)[g_n_features // 2:]))
+            self.nvp1 = RealNVPFlow(flow_feat_dim, latent_dim,
+                                    weight_std=weight_std, warp_inds=list(np.arange(latent_dim)[:latent_dim // 2]))
+            self.nvp2 = RealNVPFlow(flow_feat_dim, latent_dim,
+                                    weight_std=weight_std, warp_inds=list(np.arange(latent_dim)[latent_dim // 2:]))
 
     def forward(self, g, mode='direct'):
         if mode == 'direct':

@@ -86,8 +86,8 @@ class Decoder(nn.Module):
         
         self.mixture_weights_enc = WeightsNetwork(
             n_layers=cfg.weight_n_layers,
-            in_features=self.feat_dim,
-            latent_space_size=self.latent_dim,
+            in_features=self.latent_dim,
+            out_features=self.n_flows,
             mu_weight_std=0.001,
             mu_bias=0.0
         )
@@ -95,7 +95,7 @@ class Decoder(nn.Module):
         self.point_prior = MLP(
             n_layers=cfg.point_prior_n_layers,
             in_features=self.latent_dim,
-            latent_dim=cfg.input_dim,
+            out_features=cfg.input_dim,
             mu_weight_std=0.001,
             mu_bias=0.0,
             deterministic=False,
@@ -133,7 +133,7 @@ class Decoder(nn.Module):
         total_count = flow_depth * count_CondRealNVPFlow3DTriple * self.n_flows
         return total_count
 
-    def get_weights(self, latent_feats, warmup=False):
+    def get_weights(self, latent_vector, warmup=False):
         """
         Get the mixture weights for the decoder flows.
         Args:
@@ -143,9 +143,9 @@ class Decoder(nn.Module):
             mixture_weights: computed weights
         """
         if warmup:
-            return self.mixture_weights_logits.unsqueeze(0).expand(latent_feats.shape[0], self.n_flows)
+            return self.mixture_weights_logits.unsqueeze(0).expand(latent_vector.shape[0], self.n_flows)
 
-        return self.mixture_weights_enc(latent_feats)
+        return self.mixture_weights_enc(latent_vector)
     
     def reparametrize(self, mus, logvars):
         """
@@ -204,14 +204,14 @@ class Decoder(nn.Module):
             p: input features
             g: additional conditioning features
             n_sampled_points: number of points to sample
-            mode: 'direct' or 'inverse'
+            mode: 'training' or 'generating'
             warmup: whether to use warmup mode
         Returns:
             ps: decoded features
             mus: means of the flows
             logvars: log variances of the flows
         """
-        mixture_weights_logits = self.get_weights(p, warmup=warmup)
+        mixture_weights_logits = self.get_weights(g, warmup=warmup)
 
         if self.mode == 'training':
             n_sample_flow = [n_sampled_points for _ in range(self.n_flows)]

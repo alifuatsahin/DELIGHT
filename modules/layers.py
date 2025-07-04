@@ -57,7 +57,7 @@ class MLP(nn.Module):
         self,
         n_layers,
         in_features,
-        latent_dim,
+        out_features,
         mu_weight_std=0.001,
         mu_bias=0.0,
         deterministic=False,
@@ -67,7 +67,7 @@ class MLP(nn.Module):
         super().__init__()
         self.n_layers = n_layers
         self.in_features = in_features
-        self.latent_dim = latent_dim
+        self.out_features = out_features
         self.mu_weight_std = mu_weight_std
         self.mu_bias = mu_bias
         self.deterministic = deterministic
@@ -80,7 +80,7 @@ class MLP(nn.Module):
                 self.features.add_module('mlp{}_swish'.format(i), Swish())
 
         self.mus = nn.Sequential(OrderedDict([
-            ('mu_mlp0', nn.Linear(in_features, latent_dim, bias=True))
+            ('mu_mlp0', nn.Linear(in_features, out_features, bias=True))
         ]))
 
         with torch.no_grad():
@@ -89,7 +89,7 @@ class MLP(nn.Module):
 
         if not self.deterministic:
             self.logvars = nn.Sequential(OrderedDict([
-                ('logvar_mlp0', nn.Linear(in_features, latent_dim, bias=True))
+                ('logvar_mlp0', nn.Linear(in_features, out_features, bias=True))
             ]))
             with torch.no_grad():
                 self.logvars[-1].weight.data.fill_(logvar_weight_std)
