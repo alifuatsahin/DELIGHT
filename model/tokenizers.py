@@ -2,6 +2,36 @@ import torch
 import torch.nn as nn 
 import torch.nn.functional as F 
 
+from modules.layers import MLP
+
+class KLQuantizer(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+
+        self.latent_posterior = MLP(
+            cfg.model.posterior_n_layers, self.encoder.out_features,
+            cfg.model.latent_dim, deterministic=False,
+            mu_weight_std=0.0033, mu_bias=0.0,
+            logvar_weight_std=0.033, logvar_bias=0.0
+        )
+
+    def reparameterize(self, mean, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+
+        return mean + eps * std
+    
+    def forward(self, latent):
+        """
+        Forward pass for the KLQuantizer module.
+        """
+        output = {}
+        # get posterior distribution from point cloud features
+        output['g_posterior_mus'], output['g_posterior_logvars'] = self.latent_posterior(latent)
+        output['g_posterior_samples'] = self.reparameterize(output['g_posterior_mus'], output['g_posterior_logvars'])
+
+        return output
+
 
 class SoftVectorQuantizer(nn.Module):
     def __init__(

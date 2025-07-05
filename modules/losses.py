@@ -90,12 +90,12 @@ class Flow_Mixture_Loss(nn.Module):
         gnll_weight: 1, weight of prior flow loss
         gent_weight: entropy loss of posterior
     '''
-    def __init__(self, **kwargs):
+    def __init__(self, pnnl_weight=1.0, gnll_weight=1.0, gent_weight=1.0, n_flows=1):
         super(Flow_Mixture_Loss, self).__init__()
-        self.pnll_weight = kwargs.get('pnll_weight')
-        self.gnll_weight = kwargs.get('gnll_weight')
-        self.gent_weight = kwargs.get('gent_weight')
-        self.n_components = kwargs.get('n_components')
+        self.pnll_weight = pnnl_weight
+        self.gnll_weight = gnll_weight
+        self.gent_weight = gent_weight
+        self.n_flows = n_flows
         self.PNLL = FlowMixtureNLL()
         self.GNLL = GaussianFlowNLL()
         self.GENT = GaussianEntropy()

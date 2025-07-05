@@ -1,6 +1,9 @@
 from loguru import logger
 import argparse
 import os
+import sys
+
+from utils import utils
 
 @logger.catch(onerror=lambda _: sys.exit(1), reraise=False)
 def main(args, config):
@@ -58,6 +61,7 @@ if __name__ == "__main__":
     args, config = get_args()
 
     if args.num_gpus > 1:
+        args.distributed = True
         processes = []
         for rank in range(args.num_gpus):
             logger.info(f'Starting process for GPU {rank}')
@@ -71,6 +75,7 @@ if __name__ == "__main__":
             p.join()
         
     else:
+        args.distributed = False
         utils.init_processes(main, args, config)
     
     logger.info('Training or evaluation completed.')
