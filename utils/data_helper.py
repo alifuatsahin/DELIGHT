@@ -65,7 +65,6 @@ class CenterCloud(object):
 
 
 class Random3DRotation(object):
-
     def __call__(self, sample):
         random_3d_rotation = Rotation.random()
         sample['cloud'] = np.transpose(

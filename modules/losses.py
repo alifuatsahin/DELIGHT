@@ -81,24 +81,24 @@ class FlowMixtureNLL(nn.Module):
         return pnll
 
 
-class Flow_Mixture_Loss(nn.Module):
+class FlowMixtureLoss(nn.Module):
     '''
     class defines the loss function of flow mixture model
 
     Args:
         pnll_weight: 1, weight of decoder flows loss
         gnll_weight: 1, weight of prior flow loss
-        gent_weight: entropy loss of posterior
+        entl_weight: entropy loss of posterior
     '''
-    def __init__(self, pnnl_weight=1.0, gnll_weight=1.0, gent_weight=1.0, n_flows=1):
-        super(Flow_Mixture_Loss, self).__init__()
+    def __init__(self, pnnl_weight=1.0, gnll_weight=1.0, entl_weight=1.0, n_flows=1):
+        super(FlowMixtureLoss, self).__init__()
         self.pnll_weight = pnnl_weight
         self.gnll_weight = gnll_weight
-        self.gent_weight = gent_weight
+        self.entl_weight = entl_weight
         self.n_flows = n_flows
         self.PNLL = FlowMixtureNLL()
         self.GNLL = GaussianFlowNLL()
-        self.GENT = GaussianEntropy()
+        self.ENTL = GaussianEntropy()
 
     def forward(self, output_prior, output_decoder, mixture_weights_logits):
         '''
@@ -113,5 +113,5 @@ class Flow_Mixture_Loss(nn.Module):
         '''
         pnll = self.PNLL(output_decoder, mixture_weights_logits)
         gnll = self.GNLL(output_prior['g_prior_samples'], output_prior['g_prior_mus'], output_prior['g_prior_logvars'])
-        gent = self.GENT(output_prior['g_posterior_logvars'])
-        return self.pnll_weight * pnll + self.gnll_weight * gnll - self.gent_weight * gent, pnll, gnll, gent
+        entl = self.ENTL(output_prior['g_posterior_logvars'])
+        return self.pnll_weight * pnll + self.gnll_weight * gnll - self.entl_weight * entl, pnll, gnll, entl

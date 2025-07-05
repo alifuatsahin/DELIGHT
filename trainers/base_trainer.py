@@ -10,29 +10,45 @@ from datasets import dataset
 from utils.utils import AverageMeter
 from utils.vis_helper import visualize_point_clouds_3d
 from utils.data_helper import normalize_point_clouds
+from utils.eval_helper import compute_NLL_metric
 
 
 class BaseTrainer(ABC):
     def __init__(self, cfg, args):
         self.cfg, self.args = cfg, args
         self.device = torch.device('cuda:%d' % args.rank)
+        self.scheduler = None
+        self.local_rank = args.local_rank
+        self.writer = None
+        self.num_val_samples = cfg.num_val_samples
+        self.num_points = self.cfg.data.tr_max_sample_points
+        self.best_eval_epoch = 0
+        self.best_eval_score = -1
 
     @abstractmethod
-    def train_iter(self, batch, *args, **kwargs):
+    def train_iter(self, batch, step):
         pass
 
     @abstractmethod
     def sample(self, *args, **kwargs):
         pass
 
+    @abstractmethod
+    def eval(self, *args, **kwargs):
+        pass
+
     def set_writer(self, writer):
         self.writer = writer
 
-    def epoch_end(self, epoch, step):
-        if hasattr(self, 'writer'):
-            self.writer.add_scalar('epoch', epoch, step)
-        else:
-            logger.warning("Writer not set. Skipping logging of epoch end.")
+    def epoch_end(self, epoch, writer=None, **kwargs):
+        # Signal now that the epoch ends....
+        if self.scheduler is not None:
+            self.scheduler.step(epoch=epoch)
+            if writer is not None:
+                writer.add_scalar(
+                    'train/opt_lr', self.scheduler.get_lr()[0], epoch)
+        if writer is not None:
+            writer.upload_meter(epoch=epoch, step=kwargs.get('step', None))
 
     def save(self, epoch=None, step=None, save_dir=None):
         data = {
@@ -131,7 +147,7 @@ class BaseTrainer(ABC):
 
             if epoch % int(cfg.save_freq) == 0 and int(cfg.save_freq) > 0 and args.rank == 0:
                 save_path = self.save(epoch=epoch, step=step, save_dir=cfg.save_dir)
-                logger.info(f"Checkpoint saved at {save_path} [Epoch]")
+                logger.info(f"Checkpoint saved at {save_path} [Epoch] {epoch}")
                 self.save(epoch=epoch, step=step)
             
             if (time.time() - tic_global) / 60 > cfg.save_time and args.rank == 0:
@@ -140,7 +156,7 @@ class BaseTrainer(ABC):
                 tic_global = time.time()
 
             if int(cfg.val_freq) > 0 and epoch % int(cfg.val_freq) == 0 and args.rank == 0:
-                score = self.evaluate(epoch=epoch, step=step)
+                score = self.eval_nll(epoch=epoch, step=step)
                 if score < self.best_eval_score or self.best_eval_score < 0:
                     self.save(save_name='best_eval.pth',  # save_dir=snapshot_dir,
                               epoch=epoch, step=step)
@@ -193,3 +209,74 @@ class BaseTrainer(ABC):
             [torch.as_tensor(a) for a in img_list], pad_value=0)
         
         writer.add_image('vis_out/recont-train', img_list, step)
+
+    # -- shared method for all model with vae component -- #
+    @torch.no_grad()
+    def eval_nll(self, step):
+        if self.cfg.training.opt.ema:
+            self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
+
+        args = self.args
+        device = torch.device('cuda:%d' % args.rank)
+
+        gen_pcs, ref_pcs = [], []
+
+        data_loader = self.train_loader
+
+        for vid, val_batch in enumerate(data_loader):
+            if vid % 30 == 1:
+                logger.info('eval: {}/{}', vid, len(data_loader))
+
+            val_x = val_batch['tr_points'].to(device)
+            m, s = val_batch['mean'], val_batch['std']
+
+            B, N, C = val_x.shape
+            m = m.view(B, 1, -1)
+            s = s.view(B, 1, -1)
+
+            inputs = val_batch['input_pts'].to(
+                device) if 'input_pts' in val_batch else None  # the noisy points
+
+            gen_x, labels, _ = self.eval(val_x, step=step, inputs=inputs, m=m, s=s)
+
+            gen_x = gen_x.cpu()
+            val_x = val_x.cpu()
+            gen_x[:, :, :3] = gen_x[:, :, :3] * s + m
+            val_x[:, :, :3] = val_x[:, :, :3] * s + m
+            gen_pcs.append(gen_x.detach().cpu())
+            ref_pcs.append(val_x.detach().cpu())
+
+        gen_pcs = torch.cat(gen_pcs, dim=0)
+        ref_pcs = torch.cat(ref_pcs, dim=0)
+
+        # Save
+        if self.writer is not None:
+            img_list = []
+            for i in range(10):
+                points = gen_pcs[i]
+                points = normalize_point_clouds([points])[0]
+                img = visualize_point_clouds_3d([points], bound=1.0)
+                img_list.append(img)
+            img = np.concatenate(img_list, axis=2)
+            self.writer.add_image('nll/rec', torch.as_tensor(img), step)
+
+        results = compute_NLL_metric(
+            gen_pcs[:, :, :3], ref_pcs[:, :, :3], device, self.writer, batch_size=20, step=step)
+        score = 0
+        
+        for n, v in results.items():
+            if 'detail' in n:
+                continue
+            if self.writer is not None:
+                logger.info('add: {}', n)
+                self.writer.add_scalar('eval/%s' % (n), v, step)
+            if 'CD' in n:
+                score = v
+
+        if self.cfg.training.opt.ema:
+            self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
+        return score
+    
+    def eval_sample(self):
+        """ sample from the model """
+        pass # TO DO

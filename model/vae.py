@@ -115,6 +115,16 @@ class VAE(nn.Module):
 
         return output
     
+    def recont(self, pc):
+        n_sampled_points = pc.shape[2] # [B, 3, N]
+
+        output_encoder = self.encode(pc)
+
+        g_sample = output_encoder['g_posterior_samples']
+        samples, labels, mixture_weights_logits = self.decoder.decode(g_sample, n_sampled_points)
+
+        return samples, labels, mixture_weights_logits
+    
     def sample(self, n_sampled_points, n_samples=1):
         output = {}
         
@@ -134,7 +144,6 @@ class VAE(nn.Module):
         samples, labels, mixture_weights_logits = self.decoder.decode(g_sample, n_sampled_points)
 
         return output, samples, labels, mixture_weights_logits
-
 
     def forward(self, p, g, n_sampled_points=None, warmup=False):
         sampled_cloud_size = p.shape[2] if n_sampled_points is None else n_sampled_points

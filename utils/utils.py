@@ -33,8 +33,20 @@ class Writer:
         if self.rank == 0 and self.writer is not None:
             self.writer.add_histogram(*args, **kwargs)
 
+    def avg_meter(self, name, value):
+        if self.rank == 0:
+            if name not in self.meter_dict:
+                self.meter_dict[name] = AverageMeter()
+            self.meter_dict[name].update(value)
+
+    def upload_meter(self, step=None, epoch=None):
+        for name, value in self.meter_dict.items():
+            self.add_scalar(name, value.avg, step=step, epoch=epoch)
+        self.meter_dict = {}
+
+
 def init(rank, seed=0, save_dir=None):
-    logger.info('[common-init] at rank={}, seed={}', rank, seed)
+    logger.info('[INIT] at rank={}, seed={}', rank, seed)
     torch.manual_seed(rank + seed)
     np.random.seed(rank + seed)
     torch.cuda.manual_seed(rank + seed)
@@ -42,7 +54,7 @@ def init(rank, seed=0, save_dir=None):
     torch.backends.cudnn.benchmark = True
 
     writer = Writer(rank, save_dir)
-    logger.info('INIT DONE')
+    logger.info('[INIT] DONE')
 
     return writer
 

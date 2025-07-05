@@ -2,17 +2,17 @@ from matplotlib import pyplot as plt
 import numpy as np
 import torch
 
-def visualize_point_clouds_3d_list(pcl_lst, title_lst, vis_order, vis_2D, bound, S):
+def visualize_point_clouds_3d_list(pcl_lst, title_lst, vis_order, vis_2D, bound, S, labels):
     t_list = []
     for i in range(len(pcl_lst)):
         img = visualize_point_clouds_3d([pcl_lst[i]], [title_lst[i]] if title_lst is not None else None,
-                                        vis_order, vis_2D, bound, S)
+                                        vis_order, vis_2D, bound, S, [labels[i]])
         t_list.append(img)
     img = np.concatenate(t_list, axis=2)
     return img
 
 def visualize_point_clouds_3d(pcl_lst, title_lst=None,
-                              vis_order=[2, 0, 1], vis_2D=1, bound=1.5, S=3, rgba=0):
+                              vis_order=[2, 0, 1], vis_2D=1, bound=1.5, S=3, labels=None):
     """
     Copied and modified from https://github.com/stevenygd/PointFlow/blob/b7a9216ffcd2af49b24078156924de025c4dbfb6/utils.py#L109 
 
@@ -31,6 +31,9 @@ def visualize_point_clouds_3d(pcl_lst, title_lst=None,
     if title_lst is None:
         title_lst = [""] * len(pcl_lst)
 
+    if labels is None:
+        colors = [1] * len(pcl_lst)
+
     fig = plt.figure(figsize=(3 * len(pcl_lst), 3))
     num_col = len(pcl_lst)
     assert(num_col == len(title_lst)
@@ -38,13 +41,20 @@ def visualize_point_clouds_3d(pcl_lst, title_lst=None,
     for idx, (pts, title) in enumerate(zip(pcl_lst, title_lst)):
         ax1 = fig.add_subplot(1, num_col, 1 + idx, projection='3d')
         ax1.set_title(title)
-        rgb = None
+
+        label_arr = labels[idx]
+        if torch.is_tensor(label_arr):
+            label_arr = label_arr.cpu().detach().numpy()
+        cmap = plt.get_cmap('tab20')  # or any other colormap
+        norm = plt.Normalize(vmin=label_arr.min(), vmax=label_arr.max())
+        colors = cmap(norm(label_arr))
+
         if type(S) is list:
             psize = S[idx]
         else:
             psize = S
         ax1.scatter(pts[:, vis_order[0]], pts[:, vis_order[1]],
-                    pts[:, vis_order[2]], s=psize, c=rgb)
+                    pts[:, vis_order[2]], s=psize, c=colors)
         ax1.set_xlim(-bound, bound)
         ax1.set_ylim(-bound, bound)
         ax1.set_zlim(-bound, bound)
@@ -66,13 +76,21 @@ def visualize_point_clouds_3d(pcl_lst, title_lst=None,
                ), f'require same len, get {num_col} and {len(title_lst)}'
         for idx, (pts, title) in enumerate(zip(pcl_lst, title_lst)):
             ax1 = fig.add_subplot(1, num_col, 1 + idx, projection='3d')
-            rgb = None
+
+            assert(len(labels) == len(pcl_lst)), f'require same len, get {len(labels)} and {len(pcl_lst)}'
+            label_arr = labels[idx]
+            if torch.is_tensor(label_arr):
+                label_arr = label_arr.cpu().detach().numpy()
+            cmap = plt.get_cmap('tab20')  # or any other colormap
+            norm = plt.Normalize(vmin=label_arr.min(), vmax=label_arr.max())
+            colors = cmap(norm(label_arr))
+
             if type(S) is list:
                 psize = S[idx]
             else:
                 psize = S
             ax1.scatter(pts[:, vis_order[0]], pts[:, vis_order[1]],
-                        pts[:, vis_order[2]], s=psize, c=rgb)
+                        pts[:, vis_order[2]], s=psize, c=colors)
             ax1.set_xlim(-bound, bound)
             ax1.set_ylim(-bound, bound)
             ax1.set_zlim(-bound, bound)

@@ -1,7 +1,6 @@
 
 """ copied and modified from https://github.com/stevenygd/PointFlow/blob/master/datasets.py """
 import os
-import open3d as o3d
 import time
 import torch
 import numpy as np
@@ -10,7 +9,6 @@ from torch.utils.data import Dataset
 from torch.utils import data
 import random
 import tqdm
-from datasets.data_path import get_path
 from PIL import Image
 import h5py
 OVERFIT = 0
@@ -74,12 +72,13 @@ synsetid_to_cate = {
     '02843684': 'birdhouse',
     '02871439': 'bookshelf',
     '04574864': 'pasta15k',
-    '04574865': 'pasta'
-    # '02858304': 'boat', no boat in our dataset, merged into vessels
-    # '02834778': 'bicycle', not in our taxonomy
+    '04574865': 'pasta',
+    '02858304': 'boat',
+    '02834778': 'bicycle'
 }
 cate_to_synsetid = {v: k for k, v in synsetid_to_cate.items()}
 
+DATA_PATH = "./data/ShapeNetCore.v2.PC15k/"
 
 class PointClouds(Dataset):
     def __init__(self,
@@ -98,19 +97,10 @@ class PointClouds(Dataset):
                  all_points_mean=None,
                  all_points_std=None,
                  input_dim=3, 
-                 clip_forge_enable=0, clip_model=None
                  ):
-        self.clip_forge_enable = clip_forge_enable 
-        if clip_forge_enable:
-            import clip
-            _, self.clip_preprocess = clip.load(clip_model)
-        if self.clip_forge_enable:
-            self.img_path = []
-            img_path = get_path('clip_forge_image') 
 
         self.normalize_shape_box = normalize_shape_box
-        root_dir = get_path('pasta')
-        self.root_dir = root_dir
+        self.root_dir = DATA_PATH
         logger.info('[DATA] cat: {}, split: {}, full path: {}; norm global={}, norm-box={}',
                     categories, split, self.root_dir, normalize_global, normalize_shape_box)
 
@@ -131,10 +121,6 @@ class PointClouds(Dataset):
         self.gravity_axis = 1
         self.display_axis_order = [0, 2, 1]
 
-        self.root_dir = root_dir
-        self.split = split
-        self.in_tr_sample_size = tr_sample_size
-        self.in_te_sample_size = te_sample_size
         self.subdirs = subdirs
         self.scale = scale
         self.random_subsample = random_subsample
@@ -145,17 +131,14 @@ class PointClouds(Dataset):
         self.cate_idx_lst = []
         self.all_points = []
         tic = time.time()
+
         for cate_idx, subd in enumerate(self.subdirs):
             # NOTE: [subd] here is synset id
             sub_path = os.path.join(root_dir, subd)
-            if not os.path.isdir(sub_path):
-                print("Directory missing : %s " % (sub_path))
-                raise ValueError('check the data path')
-                continue
 
+            assert os.path.isdir(sub_path), f'Check data path: {sub_path}'
 
             all_mids = []
-            assert(os.path.exists(sub_path)), f'path missing: {sub_path}'
 
             data = h5py.File(os.path.join(sub_path, "dataset.h5"), "r")
             self.all_points = data[split]["points"][:]
@@ -165,15 +148,6 @@ class PointClouds(Dataset):
             all_mids = [s.decode('utf-8') for s in data[split]["filenames"][:]]
 
             for mid in all_mids:
-                if self.clip_forge_enable:
-                    synset_id = subd
-                    render_img_path = os.path.join(img_path, synset_id, mid.split('/')[-1], 'img_choy2016')
-                    
-                    #render_img_path = os.path.join(img_path, synset_id, mid.split('/')[-1])
-                    #if not (os.path.exists(render_img_path)): continue
-                    self.img_path.append(render_img_path)
-                    assert(os.path.exists(render_img_path)), f'render img path not find: {render_img_path}'
-
                 self.cate_idx_lst.append(cate_idx)
                 self.all_cate_mids.append((subd, mid))
 
@@ -281,17 +255,6 @@ class PointClouds(Dataset):
 
         return self.all_points_mean.reshape(1, -1), \
             self.all_points_std.reshape(1, -1)
-
-    def renormalize(self, mean, std):
-        self.all_points = self.all_points * self.all_points_std + \
-            self.all_points_mean
-        self.all_points_mean = mean
-        self.all_points_std = std
-        self.all_points = (self.all_points - self.all_points_mean) / \
-            self.all_points_std
-        self.train_points = self.all_points[:, :min(
-            10000, self.all_points.shape[1])]
-        ## self.test_points = self.all_points[:, 10000:]
 
     def __len__(self):
         return len(self.train_points)
