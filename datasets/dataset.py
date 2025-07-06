@@ -101,6 +101,7 @@ class PointClouds(Dataset):
 
         self.normalize_shape_box = normalize_shape_box
         self.root_dir = DATA_PATH
+        root_dir = self.root_dir
         logger.info('[DATA] cat: {}, split: {}, full path: {}; norm global={}, norm-box={}',
                     categories, split, self.root_dir, normalize_global, normalize_shape_box)
 
@@ -289,22 +290,7 @@ class PointClouds(Dataset):
                 'mid': mid,
                 'display_axis_order': self.display_axis_order
             })
-
-        # read image 
-        if self.clip_forge_enable:
-            img_path = self.img_path[idx]
-            img_list = os.listdir(img_path) 
-            img_list = [os.path.join(img_path, p) for p in img_list if 'jpg' in p or 'png' in p]
-            assert(len(img_list) > 0), f'get empty list at {img_path}: {os.listdir(img_path)}'
-            # subset 5 image
-            img_idx = np.random.choice(len(img_list), 5) 
-            img_list = [img_list[o] for o in img_idx]
-            img_list = [Image.open(img).convert('RGB') for img in img_list] 
-            img_list = [self.clip_preprocess(img) for img in img_list]
-            img_list = torch.stack(img_list, dim=0) # B,3,H,W  
-            all_img = img_list 
-            output['tr_img'] = all_img
-
+        
         return output
 
 def get_datasets(cfg, args):

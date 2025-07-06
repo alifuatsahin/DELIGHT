@@ -18,7 +18,7 @@ if __name__ == "__main__":
     labels = torch.randint(0, 4, (B, N), device=device)  # Random labels for testing
     # output_encoder, output_decoder, mixture_weights_logits = model(p, g)
 
-    samples, labels, mixture_weights_logits = model.recont(p)
+    _, samples, labels, mixture_weights_logits = model.sample(n_sampled_points=N*2, n_samples=B)
     print(f"Shape of the input point cloud: {p.shape}")
     print(f"Shape of the generated samples: {samples.shape}")
     print(f"Shape of the labels: {labels.shape}")

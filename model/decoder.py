@@ -160,6 +160,8 @@ class Decoder(nn.Module):
         return eps.mul(std).add_(mus)
     
     def decode(self, latents, n_sampled_points):
+        assert len(latents.shape) == 2, "Latents should be of shape (B, D)"
+
         samples = []
         labels = []
         mixture_weights_logits_list = []
@@ -167,8 +169,6 @@ class Decoder(nn.Module):
         for g in latents:
             g = g.unsqueeze(0)
             mixture_weights_logits = self.get_weights(g, warmup=False)
-            # #when evaluation, each time, only one shape is inputed
-            # assert g.shape[0] == 1
 
             #computes the probabilities of all flows
             logits_exp = np.exp(mixture_weights_logits[0].detach().cpu().numpy())

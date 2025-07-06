@@ -21,8 +21,9 @@ Loading extension module emd_ext...
 /state/partition1/llgrid/pkg/anaconda/python-ML-2025a/lib/python3.10/site-packages/torch/utils/cpp_extension.py:1964: UserWarning: TORCH_CUDA_ARCH_LIST is not set, all archs for visible cards are included for compilation. 
 If this is not desired, please set os.environ['TORCH_CUDA_ARCH_LIST'].
   warnings.warn(
-load emd_ext time: 0.024s
+load emd_ext time: 0.026s
+Decoding latent vectors with shape torch.Size([10, 128])
 Shape of the input point cloud: torch.Size([10, 3, 2048])
-Shape of the generated samples: torch.Size([10, 3, 2048])
-Shape of the labels: torch.Size([10, 2048])
+Shape of the generated samples: torch.Size([10, 3, 4096])
+Shape of the labels: torch.Size([10, 4096])
 Shape of the mixture weights logits: torch.Size([10, 4])
