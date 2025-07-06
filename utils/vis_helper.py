@@ -45,7 +45,7 @@ def visualize_point_clouds_3d(pcl_lst, title_lst=None,
         label_arr = labels[idx]
         if torch.is_tensor(label_arr):
             label_arr = label_arr.cpu().detach().numpy()
-        cmap = plt.get_cmap('tab20')  # or any other colormap
+        cmap = plt.get_cmap('Set1')  # More contrasting colors for few classes
         norm = plt.Normalize(vmin=label_arr.min(), vmax=label_arr.max())
         colors = cmap(norm(label_arr))
 
@@ -81,7 +81,7 @@ def visualize_point_clouds_3d(pcl_lst, title_lst=None,
             label_arr = labels[idx]
             if torch.is_tensor(label_arr):
                 label_arr = label_arr.cpu().detach().numpy()
-            cmap = plt.get_cmap('tab20')  # or any other colormap
+            cmap = plt.get_cmap('Set1')  # More contrasting colors for few classes
             norm = plt.Normalize(vmin=label_arr.min(), vmax=label_arr.max())
             colors = cmap(norm(label_arr))
 
@@ -128,3 +128,13 @@ def fig2data(fig):
     # canvas.tostring_argb give pixmap in ARGB mode. Roll the ALPHA channel to have it in RGBA mode
     buf = np.roll(buf, 3, axis=2)
     return buf
+
+
+if __name__ == "__main__":
+    # Example usage
+    pcl = [torch.rand(100, 3) * 2 - 1, torch.rand(100, 3) * 2 - 1]  # Random point cloud
+    title_lst = ["PC1", "PC2"]
+    labels = [torch.randint(0, 4, (100,)), torch.randint(0, 4, (100,))]
+    img = visualize_point_clouds_3d(pcl, title_lst, [2, 0, 1], vis_2D=1, bound=1.5, S=3, labels=labels)
+    plt.imshow(img.transpose(1, 2, 0))  # Transpose to HWC for displaying
+    plt.show()

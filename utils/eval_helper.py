@@ -50,7 +50,5 @@ def compute_NLL_metric(gen_pcs, ref_pcs, device, writer=None, batch_size=200, st
             continue
         output += '%s=%.3fx1e-2 ' % (k, v*1e2)
         logger.info('{}: {}', k, v)
-        if 'CD' in k:
-            score = v
 
     return results
