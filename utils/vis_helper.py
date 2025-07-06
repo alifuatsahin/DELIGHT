@@ -28,23 +28,28 @@ def visualize_point_clouds_3d(pcl_lst, title_lst=None,
         return visualize_point_clouds_3d_list(pcl_lst, title_lst, vis_order, vis_2D, bound, S, labels)
 
     pcl_lst = [pcl.cpu().detach().numpy() for pcl in pcl_lst]
+    labels = [l.cpu().detach().numpy() if torch.is_tensor(l) else l for l in labels]
+
     if title_lst is None:
         title_lst = [""] * len(pcl_lst)
 
     if labels is None:
-        colors = [1] * len(pcl_lst)
+        labels = [None] * len(pcl_lst)
 
     fig = plt.figure(figsize=(3 * len(pcl_lst), 3))
     num_col = len(pcl_lst)
     assert(num_col == len(title_lst)
            ), f'require same len, get {num_col} and {len(title_lst)}'
+    
     for idx, (pts, title) in enumerate(zip(pcl_lst, title_lst)):
         ax1 = fig.add_subplot(1, num_col, 1 + idx, projection='3d')
         ax1.set_title(title)
 
+        if labels[idx] is None:
+            labels = [np.zeros(pts.shape[0], dtype=np.int32)]
+
         label_arr = labels[idx]
-        if torch.is_tensor(label_arr):
-            label_arr = label_arr.cpu().detach().numpy()
+
         cmap = plt.get_cmap('Set1')  # More contrasting colors for few classes
         norm = plt.Normalize(vmin=label_arr.min(), vmax=label_arr.max())
         colors = cmap(norm(label_arr))
@@ -53,12 +58,14 @@ def visualize_point_clouds_3d(pcl_lst, title_lst=None,
             psize = S[idx]
         else:
             psize = S
+
         ax1.scatter(pts[:, vis_order[0]], pts[:, vis_order[1]],
                     pts[:, vis_order[2]], s=psize, c=colors)
         ax1.set_xlim(-bound, bound)
         ax1.set_ylim(-bound, bound)
         ax1.set_zlim(-bound, bound)
         ax1.grid(False)
+
     fig.canvas.draw()
 
     # grab the pixel buffer and dump it into a numpy array
@@ -78,6 +85,7 @@ def visualize_point_clouds_3d(pcl_lst, title_lst=None,
             ax1 = fig.add_subplot(1, num_col, 1 + idx, projection='3d')
 
             assert(len(labels) == len(pcl_lst)), f'require same len, get {len(labels)} and {len(pcl_lst)}'
+
             label_arr = labels[idx]
             if torch.is_tensor(label_arr):
                 label_arr = label_arr.cpu().detach().numpy()

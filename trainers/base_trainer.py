@@ -18,10 +18,12 @@ class BaseTrainer(ABC):
         self.cfg, self.args = cfg, args
         self.device = torch.device('cuda:%d' % args.rank)
         self.scheduler = None
+        self.optimizer = None
+        self.model = None
+        self.train_loader, self.test_loader = None, None
         self.local_rank = args.local_rank
         self.writer = None
-        self.num_val_samples = cfg.num_val_samples
-        self.num_points = self.cfg.data.tr_max_sample_points
+        self.num_points = self.cfg.data.sample_points
         self.best_eval_epoch = 0
         self.best_eval_score = -1
 
@@ -40,7 +42,7 @@ class BaseTrainer(ABC):
     def set_writer(self, writer):
         self.writer = writer
 
-    def epoch_end(self, epoch, writer=None, **kwargs):
+    def epoch_end(self, epoch, writer=None):
         # Signal now that the epoch ends....
         if self.scheduler is not None:
             self.scheduler.step(epoch=epoch)
@@ -48,7 +50,7 @@ class BaseTrainer(ABC):
                 writer.add_scalar(
                     'train/opt_lr', self.scheduler.get_lr()[0], epoch)
         if writer is not None:
-            writer.upload_meter(epoch=epoch, step=kwargs.get('step', None))
+            writer.upload_meter(step=epoch)
 
     def save(self, epoch=None, step=None, save_dir=None):
         data = {
@@ -124,10 +126,9 @@ class BaseTrainer(ABC):
                     visualize = int(cfg.viz_freq) > 0 and \
                         (step) % int(cfg.viz_freq) == 0
                     if visualize:
-                        self.vis_recont(logs_info, writer, step)
+                        self.vis_recont(batch, writer, step)
                         self.model.eval()
-                        self.vis_sample(writer, step=step,
-                                        include_pred_x0=False)
+                        self.vis_sample(writer, step)
                         self.model.train()
 
                 # -- timer -- #
@@ -171,11 +172,12 @@ class BaseTrainer(ABC):
             self.writer.close() if hasattr(self, 'writer') else None
 
     @torch.no_grad()
-    def vis_recont(self, logs_info, writer=None, step=None):
+    def vis_recont(self, batch, writer=None, step=None):
         """ Visualize reconstruction results """
         
-        input = logs_info.get('x_0', None)
-        output = logs_info.get('x_0_pred', None)
+        input = batch['cloud']
+
+        output, labels, _ = self.eval(input)
 
         assert len(input.shape) == len(output.shape) == 3 # (B, Npoints, 3)
         assert input.shape[0] == output.shape[0]  # batch size should match
@@ -184,24 +186,18 @@ class BaseTrainer(ABC):
 
         img_list = []
         for b in range(nvis):
-            x_list, name_list = [], []
+            x_list, name_list, label_list = [], [], []
             x_list.append(output[b])
-            name_list.append('pred')
+            name_list.append('Reconstruction')
 
             x_list.append(input[b])
-            name_list.append('target')
+            name_list.append('Ground Truth')
 
-            for k, v in logs_info.items():
-                if 'vis/' in k:
-                    x_list.append(v[b])
-                    name_list.append(k)
+            label_list.appen(labels[b])
 
             x_list = normalize_point_clouds(x_list)
 
-            vis_order = [2, 0, 1]
-            vis_args = {'vis_order': vis_order}
-
-            img = visualize_point_clouds_3d(x_list, name_list, **vis_args)
+            img = visualize_point_clouds_3d(x_list, name_list, labels=label_list)
 
             img_list.append(img)
 
@@ -209,6 +205,34 @@ class BaseTrainer(ABC):
             [torch.as_tensor(a) for a in img_list], pad_value=0)
         
         writer.add_image('vis_out/recont-train', img_list, step)
+
+    def vis_sample(self, writer=None, step=None):
+        """ Visualize sampling results """
+        n_sampled_points = self.num_points
+        n_samples = 10
+
+        samples, labels = self.sample(n_sampled_points, n_samples)
+
+        img_list = []
+        for idx, sample, label in enumerate(zip(samples, labels)):
+            x_list, name_list, label_list = [], [], []
+
+            x_list.append(sample)
+            name_list.append(f"Sample {idx + 1}")
+
+            label_list.appen(label)
+
+            x_list = normalize_point_clouds(x_list)
+
+            img = visualize_point_clouds_3d(x_list, name_list, labels=label_list)
+
+            img_list.append(img)
+
+        img_list = torchvision.utils.make_grid(
+            [torch.as_tensor(a) for a in img_list], pad_value=0)
+        
+        writer.add_image('vis_out/recont-train', img_list, step)
+
 
     # -- shared method for all model with vae component -- #
     @torch.no_grad()
@@ -219,7 +243,7 @@ class BaseTrainer(ABC):
         args = self.args
         device = torch.device('cuda:%d' % args.rank)
 
-        gen_pcs, ref_pcs = [], []
+        gen_pcs, ref_pcs, label_pcs = [], [], []
 
         data_loader = self.train_loader
 
@@ -245,9 +269,11 @@ class BaseTrainer(ABC):
             val_x[:, :, :3] = val_x[:, :, :3] * s + m
             gen_pcs.append(gen_x.detach().cpu())
             ref_pcs.append(val_x.detach().cpu())
+            label_pcs.append(labels.detach().cpu())
 
         gen_pcs = torch.cat(gen_pcs, dim=0)
         ref_pcs = torch.cat(ref_pcs, dim=0)
+        label_pcs = torch.cat(label_pcs, dim=0)
 
         # Save
         if self.writer is not None:
@@ -255,21 +281,20 @@ class BaseTrainer(ABC):
             for i in range(10):
                 points = gen_pcs[i]
                 points = normalize_point_clouds([points])[0]
-                img = visualize_point_clouds_3d([points], bound=1.0)
+                label_points = label_pcs[i]
+                img = visualize_point_clouds_3d([points], bound=1.0, labels=[label_points])
                 img_list.append(img)
             img = np.concatenate(img_list, axis=2)
             self.writer.add_image('nll/rec', torch.as_tensor(img), step)
 
         results = compute_NLL_metric(
-            gen_pcs[:, :, :3], ref_pcs[:, :, :3], device, self.writer, batch_size=20, step=step)
+            gen_pcs[:, :, :3], ref_pcs[:, :, :3], label_pcs, device, self.writer, batch_size=20, step=step)
         score = 0
         
         for n, v in results.items():
-            if 'detail' in n:
-                continue
             if self.writer is not None:
                 logger.info('add: {}', n)
-                self.writer.add_scalar('eval/%s' % (n), v, step)
+                self.writer.add_scalar(f"eval/{n}", v, step)
             if 'CD' in n:
                 score = v
 

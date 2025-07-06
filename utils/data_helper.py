@@ -109,7 +109,6 @@ def normalize_point_clouds(pc_list):
     output_list = []
 
     for pc in pc_list:
-        pc = pc_list[i]
         pc = pc.detach().clone()
 
         assert len(pc.shape) == 2, f'expect 2D tensor, get {pc.shape}'

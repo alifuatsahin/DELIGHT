@@ -52,8 +52,7 @@ def emd_approx(sample, ref, require_grad=True):
 
     return emd_pyt
 
-def EMD_CD_F1(sample_pcs, ref_pcs, batch_size, accelerated_cd=False, reduced=True, cd_option=False,
-           emd_option=False, one_part_of_cd=False, f1_option=False, f1_threshold=0.0001):
+def EMD_CD_F1(sample_pcs, ref_pcs, batch_size, accelerated_cd=False, reduced=True, require_grad=False, f1_threshold=0.0001):
     N_sample = sample_pcs.shape[0]
     N_ref = ref_pcs.shape[0]
     assert N_sample == N_ref, "REF:%d SMP:%d" % (N_ref, N_sample)
@@ -61,9 +60,7 @@ def EMD_CD_F1(sample_pcs, ref_pcs, batch_size, accelerated_cd=False, reduced=Tru
     cd_lst = []
     emd_lst = []
     f1_lst = []
-    cdl_lst = []
-    cdr_lst= []
-    cd, emd, f1_score, cdl, cdr = 0, 0, 0, 0, 0
+    cd, emd, f1_score = 0, 0, 0
     iterator = range(0, N_sample, batch_size)
 
     for b_start in iterator:
@@ -71,53 +68,43 @@ def EMD_CD_F1(sample_pcs, ref_pcs, batch_size, accelerated_cd=False, reduced=Tru
         sample_batch = sample_pcs[b_start:b_end]
         ref_batch = ref_pcs[b_start:b_end]
 
-        if accelerated_cd:
+        if accelerated_cd and require_grad:
             dl, dr = distChamferCUDA(sample_batch, ref_batch)
+        elif accelerated_cd and not require_grad:
+            dl, dr = distChamferCUDAnograd(sample_batch, ref_batch)
         else:
             dl, dr = distChamfer(sample_batch, ref_batch)
-        if cd_option:
-            cd_lst.append(dl.mean(dim=1) + dr.mean(dim=1))
-        if one_part_of_cd:
-            cdl_lst.append(dl.mean(dim=1))
-            cdr_lst.append(dr.mean(dim=1))
-        if emd_option:
-            emd_batch = emd_approx(sample_batch, ref_batch)
-            emd_lst.append(emd_batch)
-        if f1_option:
-            precision = 100. * (dr < f1_threshold).float().mean(1)
-            recall = 100. * (dl < f1_threshold).float().mean(1)
-            f1_score = 2. * precision * recall / (precision + recall + 1e-7)
-            f1_lst.append(f1_score)
-
-    if cd_option:
-        cd = torch.cat(cd_lst).mean() if reduced else torch.cat(cd_lst)
-    if emd_option:
-        emd = torch.cat(emd_lst).mean() if reduced else torch.cat(emd_lst)
-    if f1_option:
-        f1_score = torch.cat(f1_lst).mean() if reduced else torch.cat(f1_lst)
-    if one_part_of_cd:
-        cdl = torch.cat(cdl_lst).mean() if reduced else torch.cat(cdl_lst)
-        cdr = torch.cat(cdr_lst).mean() if reduced else torch.cat(cdr_lst)
+        cd_lst.append(dl.mean(dim=1) + dr.mean(dim=1))
         
+        # EMD
+        emd_batch = emd_approx(sample_batch, ref_batch, require_grad)
+        emd_lst.append(emd_batch)
+
+        # F1 score
+        precision = 100. * (dr < f1_threshold).float().mean(1)
+        recall = 100. * (dl < f1_threshold).float().mean(1)
+        f1_score = 2. * precision * recall / (precision + recall + 1e-7)
+        f1_lst.append(f1_score)
+
+    cd = torch.cat(cd_lst).mean() if reduced else torch.cat(cd_lst)
+    emd = torch.cat(emd_lst).mean() if reduced else torch.cat(emd_lst)
+    f1_score = torch.cat(f1_lst).mean() if reduced else torch.cat(f1_lst)
+
     results = {
         'CD': cd,
         'EMD': emd,
         'F1': f1_score,
-        'CDL': cdl,
-        'CDR': cdr
     }
     return results
 
 
-def _pairwise_EMD_CD_F1_SCORE(sample_pcs, ref_pcs, batch_size, f1_threshold, accelerated_cd=True,
-                              cd_option=False, one_part_of_cd=False, emd_option=False, f1_option=False):
+def _pairwise_EMD_CD_F1_SCORE(sample_pcs, ref_pcs, batch_size, f1_threshold, accelerated_cd=True, require_grad=False):
     N_sample = sample_pcs.shape[0]
     N_ref = ref_pcs.shape[0]
     all_cd = []
     all_emd = []
     all_f1_score = []
-    all_cd_left = []
-    all_cd_right = []
+
     iterator = range(N_sample)
     for sample_b_start in iterator:
         sample_batch = sample_pcs[sample_b_start]
@@ -125,8 +112,7 @@ def _pairwise_EMD_CD_F1_SCORE(sample_pcs, ref_pcs, batch_size, f1_threshold, acc
         cd_lst = []
         emd_lst = []
         f1_score_lst = []
-        cd_lst_left = []
-        cd_lst_right = []
+
         for ref_b_start in range(0, N_ref, batch_size):
             ref_b_end = min(N_ref, ref_b_start + batch_size)
             ref_batch = ref_pcs[ref_b_start:ref_b_end]
@@ -135,54 +121,38 @@ def _pairwise_EMD_CD_F1_SCORE(sample_pcs, ref_pcs, batch_size, f1_threshold, acc
             sample_batch_exp = sample_batch.view(1, -1, 3).expand(batch_size_ref, -1, -1)
             sample_batch_exp = sample_batch_exp.contiguous()
 
-            if accelerated_cd:
-                dl, dr = distChamferCUDA(sample_batch_exp, ref_batch)
+            if accelerated_cd and require_grad:
+                dl, dr = distChamferCUDA(sample_batch, ref_batch)
+            elif accelerated_cd and not require_grad:
+                dl, dr = distChamferCUDAnograd(sample_batch, ref_batch)
             else:
-                dl, dr = distChamfer(sample_batch_exp, ref_batch)
+                dl, dr = distChamfer(sample_batch, ref_batch)
 
-            if one_part_of_cd:
-                cd_lst_left.append((dl.mean(dim=1)).view(1, -1))
-                cd_lst_right.append((dr.mean(dim=1)).view(1, -1))
+            cd_lst.append((dl.mean(dim=1) + dr.mean(dim=1)).view(1, -1))
+            
+            emd_batch = emd_approx(sample_batch_exp, ref_batch)
+            emd_lst.append(emd_batch.view(1, -1))
 
-            if cd_option:
-                cd_lst.append((dl.mean(dim=1) + dr.mean(dim=1)).view(1, -1))
-                
-            if emd_option:
-                emd_batch = emd_approx(sample_batch_exp, ref_batch)
-                emd_lst.append(emd_batch.view(1, -1))
+            precision = 100. * (dr < f1_threshold).float().mean(1)
+            recall = 100. * (dl < f1_threshold).float().mean(1)
 
-            if f1_option:
-                precision = 100. * (dr < f1_threshold).float().mean(1)
-                recall = 100. * (dl < f1_threshold).float().mean(1)
+            f1_score = 2. * precision * recall / (precision + recall + 1e-7)
+            f1_score_lst.append(f1_score.view(1, -1))
 
-                f1_score = 2. * precision * recall / (precision + recall + 1e-7)
-                f1_score_lst.append(f1_score.view(1, -1))
+        cd_lst = torch.cat(cd_lst, dim=1)
+        all_cd.append(cd_lst)
 
-        if cd_option:
-            cd_lst = torch.cat(cd_lst, dim=1)
-            all_cd.append(cd_lst)
-        if emd_option:
-            emd_lst = torch.cat(emd_lst, dim=1)
-            all_emd.append(emd_lst)
-        if f1_option:
-            f1_score_lst = torch.cat(f1_score_lst, dim=1)
-            all_f1_score.append(f1_score_lst)
-        if one_part_of_cd:
-            cd_lst_left = torch.cat(cd_lst_left, dim=1)
-            cd_lst_right = torch.cat(cd_lst_right, dim=1)
-            all_cd_left.append(cd_lst_left)
-            all_cd_right.append(cd_lst_right)
-    
-    if cd_option:
+        emd_lst = torch.cat(emd_lst, dim=1)
+        all_emd.append(emd_lst)
+
+        f1_score_lst = torch.cat(f1_score_lst, dim=1)
+        all_f1_score.append(f1_score_lst)
+
         all_cd = torch.cat(all_cd, dim=0)  # N_sample, N_ref
-    if emd_option:
         all_emd = torch.cat(all_emd, dim=0)  # N_sample, N_ref
-    if f1_option:
         all_f1_score = torch.cat(all_f1_score, dim=0)
-    if one_part_of_cd:
-        all_cd_left = torch.cat(all_cd_left, dim=0)
-        all_cd_right = torch.cat(all_cd_right, dim=0)
-    return all_cd, all_emd, all_f1_score, all_cd_left, all_cd_right
+
+    return all_cd, all_emd, all_f1_score
 
 
 # Adapted from https://github.com/xuqiantong/GAN-Metrics/blob/master/framework/metric.py
@@ -239,81 +209,51 @@ def lgan_mmd_cov(all_dist, mode='min'):
 
 
 def compute_all_metrics(sample_pcs, ref_pcs, batch_size, accelerated_cd=False,
-                        f1_threshold=0.001, cd_option=False, one_part_of_cd=False, emd_option=False, f1_option=False):
+                        f1_threshold=0.001, require_grad=False):
     results = {}
 
-    M_rs_cd, M_rs_emd, M_rs_f1_score, M_rs_cd_left, M_rs_cd_right = _pairwise_EMD_CD_F1_SCORE(
+    M_rs_cd, M_rs_emd, M_rs_f1_score = _pairwise_EMD_CD_F1_SCORE(
         sample_pcs, ref_pcs, batch_size, accelerated_cd=accelerated_cd,
-        f1_threshold=f1_threshold, cd_option=cd_option,
-        one_part_of_cd=one_part_of_cd, emd_option=emd_option, f1_option=f1_option)
+        f1_threshold=f1_threshold, require_grad=require_grad)
 
-    if cd_option:
-        res_cd = lgan_mmd_cov(M_rs_cd)
-        results.update({
-            "%s-CD" % k: v for k, v in res_cd.items()
-        })
+    res_cd = lgan_mmd_cov(M_rs_cd)
+    results.update({
+        "%s-CD" % k: v for k, v in res_cd.items()
+    })
 
-    if emd_option:
-        res_emd = lgan_mmd_cov(M_rs_emd)
-        results.update({
-            "%s-EMD" % k: v for k, v in res_emd.items()
-        })
+    res_emd = lgan_mmd_cov(M_rs_emd)
+    results.update({
+        "%s-EMD" % k: v for k, v in res_emd.items()
+    })
 
-    if f1_option:
-        res_f1_score = lgan_mmd_cov(M_rs_f1_score, 'max')
-        results.update({
-            "%s-F1" % k: v for k, v in res_f1_score.items()
-        })
-    if one_part_of_cd:
-        res_cd_left = lgan_mmd_cov(M_rs_cd_left)
-        results.update({
-            "%s-CD-left" % k: v for k, v in res_cd_left.items()
-        })
-
-        res_cd_right = lgan_mmd_cov(M_rs_cd_right)
-        results.update({
-            "%s-CD-right" % k: v for k, v in res_cd_right.items()
-        })
+    res_f1_score = lgan_mmd_cov(M_rs_f1_score, 'max')
+    results.update({
+        "%s-F1" % k: v for k, v in res_f1_score.items()
+    })
 
 
-    M_rr_cd, M_rr_emd, M_rr_f1_score, M_rr_cd_left, M_rr_cd_right = _pairwise_EMD_CD_F1_SCORE(
+    M_rr_cd, M_rr_emd, M_rr_f1_score = _pairwise_EMD_CD_F1_SCORE(
         ref_pcs, ref_pcs, batch_size, accelerated_cd=accelerated_cd,
-        f1_threshold=f1_threshold, cd_option=cd_option,
-        one_part_of_cd=one_part_of_cd, emd_option=emd_option, f1_option=f1_option)
-    M_ss_cd, M_ss_emd, M_ss_f1_score, M_ss_cd_left, M_ss_cd_right = _pairwise_EMD_CD_F1_SCORE(
+        f1_threshold=f1_threshold, require_grad=require_grad)
+    M_ss_cd, M_ss_emd, M_ss_f1_score = _pairwise_EMD_CD_F1_SCORE(
         sample_pcs, sample_pcs, batch_size, accelerated_cd=accelerated_cd,
-        f1_threshold=f1_threshold, cd_option=cd_option,
-        one_part_of_cd=one_part_of_cd, emd_option=emd_option, f1_option=f1_option)
+        f1_threshold=f1_threshold, require_grad=require_grad)
 
     # 1-NN results
-    if cd_option:
-        one_nn_cd_res = knn(M_ss_cd, M_rs_cd, M_rr_cd, 1, sqrt=False)
-        results.update({
-                "1-NN-CD-%s" % k: v for k, v in one_nn_cd_res.items() if 'acc' in k
-        })
+    one_nn_cd_res = knn(M_ss_cd, M_rs_cd, M_rr_cd, 1, sqrt=False)
+    results.update({
+            "1-NN-CD-%s" % k: v for k, v in one_nn_cd_res.items() if 'acc' in k
+    })
 
-    if emd_option:
-        one_nn_emd_res = knn(M_ss_emd, M_rs_emd, M_rr_emd, 1, sqrt=False)
-        results.update({
-            "1-NN-EMD-%s" % k: v for k, v in one_nn_emd_res.items() if 'acc' in k
-        })
+    one_nn_emd_res = knn(M_ss_emd, M_rs_emd, M_rr_emd, 1, sqrt=False)
+    results.update({
+        "1-NN-EMD-%s" % k: v for k, v in one_nn_emd_res.items() if 'acc' in k
+    })
 
-    if f1_option:
-        one_nn_f1_score_res = knn(M_ss_f1_score, M_rs_f1_score, M_rr_f1_score, 1, sqrt=False)
-        results.update({
-            "1-NN-F1-%s" % k: v for k, v in one_nn_f1_score_res.items() if 'acc' in k
-        })
-
-    if one_part_of_cd:
-        one_nn_cd_left = knn(M_ss_cd_left, M_rs_cd_left, M_rr_cd_left, 1, sqrt=False)
-        results.update({
-            "1-NN-CD-left-%s" % k: v for k, v in one_nn_cd_left.items() if 'acc' in k
-        })
-
-        one_nn_cd_right = knn(M_ss_cd_right, M_rs_cd_right, M_rr_cd_right, 1, sqrt=False)
-        results.update({
-            "1-NN-CD-right-%s" % k: v for k, v in one_nn_cd_right.items() if 'acc' in k
-        })
+    one_nn_f1_score_res = knn(M_ss_f1_score, M_rs_f1_score, M_rr_f1_score, 1, sqrt=False)
+    results.update({
+        "1-NN-F1-%s" % k: v for k, v in one_nn_f1_score_res.items() if 'acc' in k
+    })
 
     return results
 

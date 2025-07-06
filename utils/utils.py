@@ -5,6 +5,7 @@ from torch.utils.tensorboard import SummaryWriter
 from loguru import logger
 import numpy as np
 import types
+import os
 
 class Writer:
     def __init__(self, rank, save=None):
@@ -41,7 +42,7 @@ class Writer:
 
     def upload_meter(self, step=None, epoch=None):
         for name, value in self.meter_dict.items():
-            self.add_scalar(name, value.avg, step=step, epoch=epoch)
+            self.add_scalar(name, value.avg, step=step)
         self.meter_dict = {}
 
 
@@ -205,3 +206,18 @@ def get_opt(params, cfgopt, use_ema, other_cfg=None):
             assert 0, "args.schedulers should be either 'exponential' or 'linear' or 'step'"
 
     return optimizer, scheduler
+
+def init_processes(rank, size, fn, args, config):
+    """ Initialize the distributed environment. """
+    os.environ['MASTER_ADDR'] = args.master_address
+    os.environ['MASTER_PORT'] = '6020'
+    logger.info('Set MASTER_PORT: {}, MASTER_PORT: {}', os.environ['MASTER_ADDR'], os.environ['MASTER_PORT'])
+
+    logger.info('Init Process: rank={}, world_size={}', rank, size)
+    torch.cuda.set_device(args.local_rank)
+    dist.init_process_group(
+        backend='nccl', init_method='env://', rank=rank, world_size=size)
+    fn(args, config)
+    logger.info('Barrier: rank={}, world_size={}', rank, size)
+    dist.barrier()
+    logger.info('Skip destroy_process_group: rank={}, world_size={}', rank, size)

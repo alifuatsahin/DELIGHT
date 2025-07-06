@@ -15,6 +15,10 @@ cfg.model.weight_n_layers = 3
 cfg.model.prior_flow_depth = 7
 cfg.model.prior_feat_dim = 128
 
+cfg.data = CN()
+cfg.data.dataset = 'shapenet'
+cfg.data.sample_points = 2048
+
 cfg.training = CN()
 cfg.training.batch_size = 32
 cfg.training.epochs = 100

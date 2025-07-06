@@ -7,7 +7,6 @@ from model.vae import VAE
 from .base_trainer import BaseTrainer
 from modules.losses import FlowMixtureLoss
 from utils import utils
-from utils.utils import AverageMeter
 
 class Trainer(BaseTrainer):
     def __init__(self, cfg, args):
@@ -21,11 +20,6 @@ class Trainer(BaseTrainer):
             gent_weight=cfg.training.opt.entl_weight,
             n_components=cfg.model.n_flows
         )
-
-        self.LB = AverageMeter()
-        self.PNLL = AverageMeter()
-        self.GNLL = AverageMeter()
-        self.GENT = AverageMeter()
 
         self.grad_scalar = GradScaler(2**10, enabled=True)
 
@@ -50,22 +44,17 @@ class Trainer(BaseTrainer):
         """
         self.model.train()
 
-        warmup_iters = len(self.train_loader) * self.cfg.training.opt.vae_lr_warmup_epochs
-        
-        utils.update_vae_lr(self.cfg, step, warmup_iters, self.optimizer)
-
         self.model.train()
         self.optimizer.zero_grad()
 
         tr_pts = data['tr_points'].to(self.device)  # (B, Npoints, 3)
         eval_pts = data['eval_pts'].to(self.device)  # (B, Npoints, 3)
-        batch_size = tr_pts.size(0)
 
         with autocast(enabled=True):
             output_encoder, output_decoder, mixture_weights_logits = self.model(eval_pts, tr_pts)
-            output = self.get_loss(output_encoder, output_decoder, mixture_weights_logits, writer=self.writer, it=step)
+            loss_dict = self.get_loss(output_encoder, output_decoder, mixture_weights_logits, writer=self.writer, it=step)
 
-            loss = output['loss']
+            loss = loss_dict['loss']
             lossv = loss.detach().cpu().item()
 
         self.grad_scalar.scale(loss).backward()
@@ -77,33 +66,51 @@ class Trainer(BaseTrainer):
 
         output = {}
         if self.writer is not None:
-            for k, v in output.items():
-                if 'print/' in k and step is not None:
+            for k, v in loss_dict.items():
+                if step is not None:
                     v0 = v.mean().item() if torch.is_tensor(v) else v
-                    self.writer.avg_meter(k.split('print/')[-1], v0)
-                if 'hist/' in k:
-                    output[k] = v
+                    self.writer.avg_meter(k, v0)
+
 
         output.update({
             'loss': lossv,
-            'PNNL': output_decoder['PNNL'].detach().cpu(),  # perturbed data
-            'GNNL': output_decoder['GNNL'].detach().cpu(),
-            'ENTL': output_decoder['ENTL'].detach().cpu(),
+            'PNNL': loss_dict['PNNL'].detach().cpu(),
+            'GNNL': loss_dict['GNNL'].detach().cpu(),
+            'ENTL': loss_dict['ENTL'].detach().cpu(),
         })
 
         return output
     
+    @torch.no_grad()
     def sample(self, n_sampled_points, n_samples=1):
         """ sample from the model """
-        self.model.eval()
-        with torch.no_grad():
-            output = self.model.sample(n_sampled_points, n_samples)
-        return output
+        if self.cfg.opt.ema:
+            self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
 
+        self.model.eval()
+
+        _, samples, labels, _ = self.model.sample(n_sampled_points, n_samples)
+
+        output = samples.permute(0, 2, 1).contiguous()  # BN3->B3N
+
+        # switch back to original parameters
+        if self.cfg.opt.ema:
+            self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
+
+        return output, labels
+
+    @torch.no_grad()
     def eval(self, x):
         """ evaluate the model on the given input x """
-        with torch.no_grad():
-            samples, labels, mixture_weights_logits = self.model.recont(x)
+        if self.cfg.opt.ema:
+            self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
+
+        self.model.eval()
+
+        samples, labels, mixture_weights_logits = self.model.recont(x)
+
+        if self.cfg.opt.ema:
+            self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
 
         return samples, labels, mixture_weights_logits
     
