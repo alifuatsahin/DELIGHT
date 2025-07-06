@@ -6,7 +6,7 @@ def visualize_point_clouds_3d_list(pcl_lst, title_lst, vis_order, vis_2D, bound,
     t_list = []
     for i in range(len(pcl_lst)):
         img = visualize_point_clouds_3d([pcl_lst[i]], [title_lst[i]] if title_lst is not None else None,
-                                        vis_order, vis_2D, bound, S, [labels[i]])
+                                        vis_order, vis_2D, bound, S, [labels[i]] if labels is not None else None)
         t_list.append(img)
     img = np.concatenate(t_list, axis=2)
     return img
@@ -25,7 +25,7 @@ def visualize_point_clouds_3d(pcl_lst, title_lst=None,
     assert(type(pcl_lst) == list and torch.is_tensor(pcl_lst[0])
            ), f'expect list of tensor, get {type(pcl_lst)} and {type(pcl_lst[0])}'
     if len(pcl_lst) > 1:
-        return visualize_point_clouds_3d_list(pcl_lst, title_lst, vis_order, vis_2D, bound, S)
+        return visualize_point_clouds_3d_list(pcl_lst, title_lst, vis_order, vis_2D, bound, S, labels)
 
     pcl_lst = [pcl.cpu().detach().numpy() for pcl in pcl_lst]
     if title_lst is None:
