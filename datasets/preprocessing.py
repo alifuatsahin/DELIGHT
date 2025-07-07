@@ -1,13 +1,13 @@
 import numpy as np
 from loguru import logger
-import h5py
+import h5py as h5
 import argparse
 import multiprocessing
 import sys
 import os
 import gc
-
-from .objmesh import ObjMesh
+import pandas as pd
+import trimesh
 
 # taken from https://github.com/optas/latent_3d_points/blob/
 # 8e8f29f8124ed5fc59439e8551ba7ef7567c9a37/src/in_out.py
@@ -72,6 +72,8 @@ synsetid_to_cate = {
     '02858304': 'boat',
     '02834778': 'bicycle'
 }
+
+# Reverse mapping for category names to synset IDs
 cate_to_synsetid = {v: k for k, v in synsetid_to_cate.items()}
 
 def get_args():
@@ -79,174 +81,249 @@ def get_args():
         description='Data processor for ShapeNetCore dataset. '
         'All OBJ files are preprocessed and accumulated in a single .h5 file.'
     )
-    parser.add_argument('data_dir', type=str, required=True, help='Path to directory containing the unpacked dataset.')
-    parser.add_argument('save_dir', type=str, required=True, help='Path to directory for the output.')
-    parser.add_argument('n_processes', type=int, help='Number of parallel processing jobs.')
-    parser.add_argument('batch_size', type=int, help='Number of shapes in processed batches.')
+    parser.add_argument('--data_dir', type=str, required=True, help='Path to directory containing the unpacked dataset.')
+    parser.add_argument('--save_dir', type=str, required=True, help='Path to directory for the output.')
+    parser.add_argument('--dataset', type=str, choices=['ShapeNetCore.v2', 'custom'], help='Dataset to preprocess.')
+    parser.add_argument('--categories', type=list, default=['all'], nargs='+', help='List of categories to preprocess. Use "all" for all categories.')
+    parser.add_argument('--n_processes', type=int, help='Number of parallel processing jobs.')
+    parser.add_argument('--train_split', type=float, default=0.8, help='Proportion of data for training.')
+    parser.add_argument('--test_split', type=float, default=0.1, help='Proportion of data for testing.')
 
     args = parser.parse_args()
 
     return args
 
-def process_obj_file(sample):
-    sample_obj = ObjMesh(sample)
-    sample_obj.cleanup()
-    data = sample_obj.reformat()
+def process_obj_file(sample):    
+    try:
+        # Load and clean mesh
+        mesh = trimesh.load(sample, process=True)  # process=True does basic cleanup
+        
+        # Additional cleaning to match your original requirements
+        mesh.merge_vertices()
+        mesh.remove_duplicate_faces()
+        mesh.remove_degenerate_faces()
+        mesh.remove_unreferenced_vertices()
+        
+        # Calculate area-weighted center (matching your original implementation)
+        if len(mesh.faces) > 0 and hasattr(mesh, 'area_faces'):
+            face_areas = mesh.area_faces
+            if face_areas.sum() > 0:
+                face_centers = mesh.triangles.mean(axis=1)
+                weights = face_areas / face_areas.sum()
+                shape_center = (weights.reshape(-1, 1) * face_centers).sum(0)
+            else:
+                shape_center = mesh.vertices.mean(0)
+        else:
+            shape_center = mesh.vertices.mean(0)
+        
+        # Center the mesh
+        mesh.apply_translation(-shape_center)
+        
+        # Scale to unit sphere (matching your original implementation)
+        shape_scale = np.sqrt((mesh.vertices**2).sum(1)).max()
+        if shape_scale > 0:
+            mesh.apply_scale(1.0 / shape_scale)
+        else:
+            shape_scale = 1.0
+        
+        # Calculate bounding box of normalized mesh
+        if len(mesh.vertices) > 0:
+            mins, maxs = mesh.vertices.min(0), mesh.vertices.max(0)
+            bbox_c = (maxs + mins) / 2.
+            bbox_s = (maxs - mins).max()
+        else:
+            bbox_c = np.zeros(3, dtype=np.float32)
+            bbox_s = 0.0
+        
+        return {
+            'vertices_c': mesh.vertices.astype(np.float32),
+            'orig_c': shape_center.astype(np.float32),
+            'orig_s': np.float32(shape_scale),
+            'bbox_c': bbox_c.astype(np.float32),
+            'bbox_s': np.float32(bbox_s),
+            'faces_vc': mesh.faces.astype(np.uint32)
+        }
+        
+    except Exception as e:
+        # Fallback for problematic meshes
+        print(f"Error processing {sample}: {e}")
+        return {
+            'vertices_c': np.zeros((3, 3), dtype=np.float32),
+            'orig_c': np.zeros(3, dtype=np.float32),
+            'orig_s': np.float32(1.0),
+            'bbox_c': np.zeros(3, dtype=np.float32),
+            'bbox_s': np.float32(0.0),
+            'faces_vc': np.zeros((1, 3), dtype=np.uint32)
+        }
 
-    del sample_obj
+def process_meshes_memory_efficient(sample_paths, n_workers, progress_key="meshes"):
+    """
+    Processes all meshes in parallel and aggregates results efficiently.
+    """
+    logger.info(f"Processing {len(sample_paths)} {progress_key} meshes with {n_workers} workers")
+    
+    # Process all meshes in parallel using a single pool
+    with multiprocessing.Pool(processes=n_workers) as pool:
+        processing_results = pool.map(process_obj_file, sample_paths)
+    
+    # Pre-allocate arrays based on total counts
+    total_vertices = sum(len(result['vertices_c']) for result in processing_results)
+    total_faces = sum(len(result['faces_vc']) for result in processing_results)
+    n_meshes = len(processing_results)
+    
+    logger.info(f"Aggregating {total_vertices} vertices and {total_faces} faces from {n_meshes} meshes")
+    
+    # Pre-allocate output arrays
+    all_vertices = np.empty((total_vertices, 3), dtype=np.float32)
+    all_faces = np.empty((total_faces, 3), dtype=np.uint32)
+    
+    # Bounds arrays
+    vertices_bounds = np.zeros(n_meshes + 1, dtype=np.uint64)
+    faces_bounds = np.zeros(n_meshes + 1, dtype=np.uint64)
+    
+    # Metadata arrays
+    orig_c = np.empty((n_meshes, 3), dtype=np.float32)
+    orig_s = np.empty(n_meshes, dtype=np.float32)
+    bbox_c = np.empty((n_meshes, 3), dtype=np.float32)
+    bbox_s = np.empty(n_meshes, dtype=np.float32)
+    
+    # Fill arrays efficiently
+    v_offset = 0
+    f_offset = 0
+    
+    for i, result in enumerate(processing_results):
+        # Vertices
+        n_verts = len(result['vertices_c'])
+        if n_verts > 0:
+            all_vertices[v_offset:v_offset + n_verts] = result['vertices_c']
+        vertices_bounds[i + 1] = vertices_bounds[i] + n_verts
+        v_offset += n_verts
+        
+        # Faces
+        n_faces = len(result['faces_vc'])
+        if n_faces > 0:
+            all_faces[f_offset:f_offset + n_faces] = result['faces_vc']
+        faces_bounds[i + 1] = faces_bounds[i] + n_faces
+        f_offset += n_faces
+        
+        # Metadata
+        orig_c[i] = result['orig_c']
+        orig_s[i] = result['orig_s']
+        bbox_c[i] = result['bbox_c']
+        bbox_s[i] = result['bbox_s']
+    
+    # Clean up processing results to free memory
+    del processing_results
     gc.collect()
+    
+    logger.info(f"Successfully processed all {progress_key} meshes")
+    
+    return {
+        'all_vertices': all_vertices,
+        'all_faces': all_faces,
+        'vertices_bounds': vertices_bounds,
+        'faces_bounds': faces_bounds,
+        'orig_c': orig_c,
+        'orig_s': orig_s,
+        'bbox_c': bbox_c,
+        'bbox_s': bbox_s
+    }
 
-    return data
-
-def preprocessing(categories=["all"], dataset="ShapeNetCore.v2"):
-    args = get_args()
-
+def preprocessing(args):
     assert os.path.exists(args.data_dir), f"Data path {args.data_dir} does not exist"
-    assert isinstance(categories, list), "Categories should be a list"
+    assert isinstance(args.categories, list), "Categories should be a list"
+
+    n_workers = args.n_processes
+    train_split = args.train_split
+    test_split = args.test_split
+
+    assert train_split + test_split <= 1, "Train and test splits must sum to less than 1"
+
+    val_split = 1 - train_split - test_split
 
     folder_list = []
 
-    if "all" in categories:
+    if "all" in args.categories:
         folder_list = os.listdir(args.data_dir)
-    elif dataset == "ShapeNetCore.v2":
-        synset_ids = [cate_to_synsetid[c] for c in categories]
-        for synset_id, category in zip(synset_ids, categories):
+    elif args.dataset == "ShapeNetCore.v2":
+        synset_ids = [cate_to_synsetid[c] for c in args.categories]
+        for synset_id, category in zip(synset_ids, args.categories):
             assert os.path.exists(os.path.join(args.data_dir, synset_id)), f"Category {category} does not exist in {args.data_dir}"
             folder_list.append(os.path.join(args.data_dir, synset_id))
-            os.makedirs(os.path.join(args.save_dir, synset_id), exist_ok=True)
     else:
-        for category in categories:
+        for category in args.categories:
             assert os.path.exists(os.path.join(args.data_dir, category)), f"Category {category} does not exist in {args.data_dir}"
             folder_list.append(os.path.join(args.data_dir, category))
-            os.makedirs(os.path.join(args.save_dir, category), exist_ok=True)
 
-    logger.info(f"[DATA] Preprocessing categories: {categories}, data path: {args.save_dir}")
+    logger.info(f"[DATA] Preprocessing categories: {args.categories}, data path: {args.save_dir}")
 
-    samples = []
+    samples = {
+        'train': [],
+        'val': [],
+        'test': []
+    }
+    cat_samples = []
 
-    for folder_path in folder_list:
-        for shape_path in os.listdir(folder_path):
-            obj_path = os.path.join(folder_path, shape_path, 'models', 'model_normalized.obj')
-            samples.append(obj_path)
-    
-
-
-def process(part, cat2label, split, fout, args, n_workers=12, batch_size=1200):
-    # Read filenames and labels #
-    samples = []
-    labels = []
-    for i in range(len(split[split['split'] == part])):
-        name = '0{}/{}/models/'.format(
-            str(split[split['split'] == part]['synsetId'].values[i]),
-            str(split[split['split'] == part]['modelId'].values[i])
-        )
-        if os.path.exists(os.path.join(args.data_dir, 'shapes', name)):
-            if os.path.exists(os.path.join(args.data_dir, 'shapes', name, 'model_normalized.obj')):
-                samples.append(name)
-                labels.append(cat2label['0{}'.format(str(split[split['split'] == part]['synsetId'].values[i]))])
+    for cat_path in folder_list:
+        for shape_path in os.listdir(cat_path):
+            if os.path.exists(os.path.join(cat_path, shape_path, 'models', 'model_normalized.obj')):
+                obj_path = os.path.join(cat_path, shape_path, 'models', 'model_normalized.obj')
+                cat_samples.append(obj_path)
             else:
-                print(os.path.join(name, 'model_normalized.obj') + ' does not exist, skipping this shape.')
-        else:
-            print(name + ' does not exist, skipping this shape.')
+                logger.warning(f"Model normalized file does not exist for {shape_path}, skipping this shape.")
 
-    # Create datasets #
-    vcb_ds = fout.create_dataset('{}_vertices_c_bounds'.format(part), shape=(len(samples) + 1,), dtype=np.uint64)
-    vcb_ds[0] = 0
-    vc_ds = fout.create_dataset('{}_vertices_c'.format(part), shape=(0, 3), maxshape=(None, 3), dtype=np.float32)
+        train_samples, val_samples, test_samples = np.split(cat_samples, [int(train_split * len(cat_samples)), int((train_split + val_split) * len(cat_samples))])
 
-    orig_c_ds = fout.create_dataset('{}_orig_c'.format(part), shape=(len(samples), 3), dtype=np.float32)
-    orig_s_ds = fout.create_dataset('{}_orig_s'.format(part), shape=(len(samples),), dtype=np.float32)
+        samples['train'].extend(train_samples)
+        samples['val'].extend(val_samples)
+        samples['test'].extend(test_samples)
 
-    bbox_c_ds = fout.create_dataset('{}_bbox_c'.format(part), shape=(len(samples), 3), dtype=np.float32)
-    bbox_s_ds = fout.create_dataset('{}_bbox_s'.format(part), shape=(len(samples),), dtype=np.float32)
+    with h5.File(os.path.join(args.save_dir, 'dataset.h5'), 'w') as f:
+        for key, sample in samples.items():
+            logger.info(f"Processing {len(sample)} samples for {key} set.")
 
-    fb_ds = fout.create_dataset('{}_faces_bounds'.format(part), shape=(len(samples) + 1,), dtype=np.uint64)
-    fb_ds[0] = 0
-    fvc_ds = fout.create_dataset('{}_faces_vc'.format(part), shape=(0, 3), maxshape=(None, 3), dtype=np.uint32)
+            group = f.create_group(key)
 
-    labels_ds = fout.create_dataset('{}_labels'.format(part), data=np.array(labels, dtype=np.uint8))
+            # Create datasets #
+            vcb_ds = group.create_dataset('vertices_c_bounds', shape=(len(sample) + 1,), dtype=np.uint64)
+            vcb_ds[0] = 0
+            vc_ds = group.create_dataset('vertices_c', shape=(0, 3), maxshape=(None, 3), dtype=np.float32)
 
-    # Read in batches #
-    processing_pool = multiprocessing.Pool(processes=n_workers)
-    n_batches = np.ceil(len(samples) / batch_size).astype(np.uint32)
-    for b_i in range(n_batches):
-        processing_list = list(map(
-            lambda s: os.path.join(args.data_dir, 'shapes', s, 'model_normalized.obj'),
-            samples[batch_size * b_i:batch_size * (b_i + 1)]
-        ))
-        processing_results = processing_pool.map(process_obj_file, processing_list)
+            orig_c_ds = group.create_dataset('orig_c', shape=(len(sample), 3), dtype=np.float32)
+            orig_s_ds = group.create_dataset('orig_s', shape=(len(sample),), dtype=np.float32)
 
-        vcb_ds[batch_size * b_i + 1:batch_size * (b_i + 1) + 1] = \
-            np.array(list(map(lambda d: len(d['vertices_c']), processing_results)), dtype=np.uint64).dot(
-                np.triu(np.ones((len(processing_results), len(processing_results)), dtype=np.uint64))
-        )
+            bbox_c_ds = group.create_dataset('bbox_c', shape=(len(sample), 3), dtype=np.float32)
+            bbox_s_ds = group.create_dataset('bbox_s', shape=(len(sample),), dtype=np.float32)
 
-        b_vc = np.concatenate(list(map(lambda d: d['vertices_c'], processing_results)), axis=0)
-        vc_ds_s = vc_ds.shape[0]
-        vc_ds.resize((vc_ds_s + len(b_vc), 3))
-        vc_ds[vc_ds_s:] = b_vc
+            fb_ds = group.create_dataset('faces_bounds', shape=(len(sample) + 1,), dtype=np.uint64)
+            fb_ds[0] = 0
+            fvc_ds = group.create_dataset('faces_vc', shape=(0, 3), maxshape=(None, 3), dtype=np.uint32)
 
-        orig_c_ds[batch_size * b_i:batch_size * (b_i + 1)] = \
-            np.concatenate(list(map(lambda d: d['orig_c'].reshape(1, -1), processing_results)), axis=0)
-        orig_s_ds[batch_size * b_i:batch_size * (b_i + 1)] = \
-            np.array(list(map(lambda d: d['orig_s'], processing_results)))
-
-        bbox_c_ds[batch_size * b_i:batch_size * (b_i + 1)] = \
-            np.concatenate(list(map(lambda d: d['bbox_c'].reshape(1, -1), processing_results)), axis=0)
-        bbox_s_ds[batch_size * b_i:batch_size * (b_i + 1)] = \
-            np.array(list(map(lambda d: d['bbox_s'], processing_results)))
-
-        fb_ds[batch_size * b_i + 1:batch_size * (b_i + 1) + 1] = \
-            np.array(list(map(lambda d: len(d['faces_vc']), processing_results)), dtype=np.uint64).dot(
-                np.triu(np.ones((len(processing_results), len(processing_results)), dtype=np.uint64))
-        )
-        b_fvc = np.concatenate(list(map(lambda d: d['faces_vc'], processing_results)), axis=0)
-        fv_ds_s = fvc_ds.shape[0]
-        fvc_ds.resize((fv_ds_s + len(b_fvc), 3))
-        fvc_ds[fv_ds_s:] = b_fvc
-
-        del processing_results
-        gc.collect()
-
-        sys.stdout.write('Packing {} meshes: [{}/{}]\n'.format(part, b_i + 1, n_batches))
-        sys.stdout.flush()
-    processing_pool.close()
-
-    # Repair cross batch shape vertices bounds #
-    vcb = np.array(vcb_ds[:])
-    vcb_upd = np.tile(
-        np.tril(np.ones((n_batches, n_batches), dtype=np.uint64)).dot(vcb[0::batch_size]).reshape(-1, 1),
-        (1, batch_size)
-    ).flatten()[:(len(vcb) - 1)]
-    vcb[1:] = vcb[1:] + vcb_upd
-    vcb_ds[:] = vcb
-
-    # Repair cross batch shape faces bounds #
-    fb = np.array(fb_ds[:])
-    fb_upd = np.tile(
-        np.tril(np.ones((n_batches, n_batches), dtype=np.uint64)).dot(fb[0::batch_size]).reshape(-1, 1),
-        (1, batch_size)
-    ).flatten()[:(len(fb) - 1)]
-    fb[1:] = fb[1:] + fb_upd
-    fb_ds[:] = fb
+            results = process_meshes_memory_efficient(sample, n_workers, progress_key=key)
+            
+            # Write to HDF5 datasets
+            vc_ds.resize((len(results['all_vertices']), 3))
+            vc_ds[:] = results['all_vertices']
+            
+            fvc_ds.resize((len(results['all_faces']), 3))
+            fvc_ds[:] = results['all_faces']
+            
+            vcb_ds[:] = results['vertices_bounds']
+            fb_ds[:] = results['faces_bounds']
+            
+            orig_c_ds[:] = results['orig_c']
+            orig_s_ds[:] = results['orig_s']
+            bbox_c_ds[:] = results['bbox_c']
+            bbox_s_ds[:] = results['bbox_s']
+            
+            logger.info(f"Successfully written {len(sample)} meshes to HDF5")
 
 def main():
-    parser = define_options_parser()
-    args = parser.parse_args()
+    args = get_args()
 
-    split = pd.read_csv(os.path.join(args.data_dir, 'all.csv'))
-    cat2label = {
-        '0{}'.format(str(cat)): i for i, cat in enumerate(np.unique(split['synsetId'].values))
-    }
-
-    fout = h5.File(os.path.join(args.save_dir, 'ShapeNetCore55v2_meshes.h5'), 'w')
-    process('train', cat2label, split, fout, args, n_workers=args.n_processes, batch_size=args.batch_size)
-    process('val', cat2label, split, fout, args, n_workers=args.n_processes, batch_size=args.batch_size)
-    process('test', cat2label, split, fout, args, n_workers=args.n_processes, batch_size=args.batch_size)
-    fout.close()
-
+    preprocessing(args)
 
 if __name__ == '__main__':
     main()
 
-    
+

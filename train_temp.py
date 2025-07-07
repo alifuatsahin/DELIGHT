@@ -1,4 +1,5 @@
 from loguru import logger
+import importlib
 import argparse
 import os
 import sys
@@ -7,16 +8,32 @@ from utils import utils
 
 @logger.catch(onerror=lambda _: sys.exit(1), reraise=False)
 def main(args, config):
-    writer = utils.init(args.global_rank, config.save_dir)
+    writer = utils.init(args.rank, config.save_dir)
 
-    writer.add_hparams(config.to_dict(), vars(args))
+    trainer_lib = importlib.import_module(config.trainer.type)
+    Trainer = trainer_lib.Trainer
+    trainer = Trainer(config, args)
 
-    ckpt_path = os.path.join(ckpt_dir, 'checkpoint.pth')
+    if args.rank == 0:
+        trainer.set_writer(writer)
+        if len(config.bash_name) > 0 and os.path.exists(config.bash_name):
+            writer.log_asset(config.bash_name)
+        if len(config.bash_name) > 0 and os.path.exists(os.path.join(config.save_dir, config.bash_name.split('/')[-1])):
+            writer.log_asset(os.path.join(
+                config.save_dir, config.bash_name.split('/')[-1]))
+    ckpt_dir = os.path.join(config.save_dir, 'checkpoints')
+    snapshot_file = os.path.join(config.save_dir, 'checkpoints', 'snapshot.pth')
 
-    if os.path.exists(ckpt_path):
-        logger.info('Found existing checkpoint, loading...')
+    # -- check if prev saved ckpt exist -- #
+    if os.path.exists(ckpt_dir) and os.path.exists(snapshot_file):
+        logger.info(
+            '[Detect saved snapshot at the checkpoint dir] resume from preemption!!! ')
+        args.resume = True
+        args.pretrained = os.path.join(
+            config.save_dir, 'checkpoints', 'snapshot.pth')
     else:
-        logger.info('No checkpoint found, starting fresh.')
+        logger.info('Could not find any checkpoint: {}, (exist={}), or snapshot {}, (exist={})',
+                    ckpt_dir, os.path.exists(ckpt_dir), snapshot_file, os.path.exists(snapshot_file))
 
     if args.resume or args.eval:
         assert args.pretrained is not None, "Pretrained model path must be provided for resuming."

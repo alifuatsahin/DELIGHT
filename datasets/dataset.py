@@ -1,17 +1,10 @@
-
 """ copied and modified from https://github.com/stevenygd/PointFlow/blob/master/datasets.py """
 import os
-import time
-import torch
 import numpy as np
 from loguru import logger
 from torch.utils.data import Dataset
 from torch.utils import data
-import random
-import tqdm
-from PIL import Image
-import h5py
-OVERFIT = 0
+import h5py as h5
 
 # taken from https://github.com/optas/latent_3d_points/blob/
 # 8e8f29f8124ed5fc59439e8551ba7ef7567c9a37/src/in_out.py
@@ -78,272 +71,144 @@ synsetid_to_cate = {
 }
 cate_to_synsetid = {v: k for k, v in synsetid_to_cate.items()}
 
-DATA_PATH = "./data/ShapeNetCore.v2.PC15k/"
-
 class PointClouds(Dataset):
-    def __init__(self,
-                 categories=['pasta15k'],
-                 tr_sample_size=10000,
-                 te_sample_size=10000,
-                 split='train',
-                 scale=1.,
-                 normalize_per_shape=False,
-                 normalize_shape_box=False,
-                 random_subsample=False,
-                 sample_with_replacement=1,
-                 normalize_std_per_axis=False,
-                 normalize_global=False,
-                 recenter_per_shape=False,
-                 all_points_mean=None,
-                 all_points_std=None,
-                 input_dim=3, 
-                 ):
+    def __init__(self, path2data, part='train', meshes_fname='meshes.h5',
+                 cloud_size=2**10, return_eval_cloud=False,
+                 return_original_scale=False, return_bbox_scale=False,
+                 cloud_transform=None):
+        super().__init__()
+        self.path2data = path2data
+        self.part = part
+        self.meshes_fname = meshes_fname
+        self.cloud_size = cloud_size
+        self.return_eval_cloud = return_eval_cloud
+        self.return_original_scale = return_original_scale
+        self.return_bbox_scale = return_bbox_scale
+        self.cloud_transform = cloud_transform
 
-        self.normalize_shape_box = normalize_shape_box
-        self.root_dir = DATA_PATH
-        root_dir = self.root_dir
-        logger.info('[DATA] cat: {}, split: {}, full path: {}; norm global={}, norm-box={}',
-                    categories, split, self.root_dir, normalize_global, normalize_shape_box)
+        self.data_file = None
+        self.load_metadata()
 
-        self.split = split
-        assert self.split in ['train', 'test', 'val']
-        self.tr_sample_size = tr_sample_size
-        self.te_sample_size = te_sample_size
-        if type(categories) is str:
-            categories = [categories]
-        self.cates = categories
+    def load_metadata(self):
+        """Load metadata arrays (bounds, centers, scales) from HDF5 file."""
+        with h5.File(os.path.join(self.path2data, self.meshes_fname), 'r', libver='latest', swmr=True) as fin:
+            group = fin[self.part]
+            
+            self.vertices_c_bounds = np.array(group['vertices_c_bounds'][:], dtype=np.uint64)
+            self.faces_bounds = np.array(group['faces_bounds'][:], dtype=np.uint64)
 
-        if 'all' in categories:
-            self.synset_ids = list(cate_to_synsetid.values())
+            if self.return_original_scale:
+                self.original_centers = np.array(group['orig_c'][:], dtype=np.float32)
+                self.original_scales = np.array(group['orig_s'][:], dtype=np.float32)
+
+            if self.return_bbox_scale:
+                self.bbox_centers = np.array(group['bbox_c'][:], dtype=np.float32)
+                self.bbox_scales = np.array(group['bbox_s'][:], dtype=np.float32)
+
+    def close(self):
+        if self.data_file is not None:
+            self.data_file.close()
+
+    
+    def sample_cloud(self, vertices_c, faces_vc, size=2**10, return_eval_cloud=False):
+        polygons = vertices_c[faces_vc]
+        cross = np.cross(polygons[:, 2] - polygons[:, 0], polygons[:, 2] - polygons[:, 1])
+        areas = np.sqrt((cross**2).sum(1)) / 2.0
+
+        probs = areas / areas.sum()
+        p_sample = np.random.choice(np.arange(polygons.shape[0]), size=2 * size if return_eval_cloud else size, p=probs)
+
+        sampled_polygons = polygons[p_sample]
+
+        s1 = np.random.random((2 * size if return_eval_cloud else size, 1)).astype(np.float32)
+        s2 = np.random.random((2 * size if return_eval_cloud else size, 1)).astype(np.float32)
+        cond = (s1 + s2) > 1.
+        s1[cond] = 1. - s1[cond]
+        s2[cond] = 1. - s2[cond]
+
+        sample = {
+            'cloud': (sampled_polygons[:, 0] +
+                    s1 * (sampled_polygons[:, 1] - sampled_polygons[:, 0]) +
+                    s2 * (sampled_polygons[:, 2] - sampled_polygons[:, 0])).astype(np.float32)
+        }
+
+        if return_eval_cloud:
+            sample['eval_cloud'] = sample['cloud'][1::2].copy().T
+            sample['cloud'] = sample['cloud'][::2].T
         else:
-            self.synset_ids = [cate_to_synsetid[c] for c in self.cates]
-        subdirs = self.synset_ids
-        # assert 'v2' in root_dir, "Only supporting v2 right now."
-        self.gravity_axis = 1
-        self.display_axis_order = [0, 2, 1]
+            sample['cloud'] = sample['cloud'].T
 
-        self.subdirs = subdirs
-        self.scale = scale
-        self.random_subsample = random_subsample
-        self.sample_with_replacement = sample_with_replacement
-        self.input_dim = input_dim
-
-        self.all_cate_mids = []
-        self.cate_idx_lst = []
-        self.all_points = []
-        tic = time.time()
-
-        for cate_idx, subd in enumerate(self.subdirs):
-            # NOTE: [subd] here is synset id
-            sub_path = os.path.join(root_dir, subd)
-
-            assert os.path.isdir(sub_path), f'Check data path: {sub_path}'
-
-            all_mids = []
-
-            data = h5py.File(os.path.join(sub_path, "dataset.h5"), "r")
-            self.all_points = data[split]["points"][:]
-
-            logger.info('[DATA] type {}', type(self.all_points))
-
-            all_mids = [s.decode('utf-8') for s in data[split]["filenames"][:]]
-
-            for mid in all_mids:
-                self.cate_idx_lst.append(cate_idx)
-                self.all_cate_mids.append((subd, mid))
-
-        logger.info('[DATA] Load data time: {:.1f}s | dir: {} | '
-                    'sample_with_replacement: {}; num points: {}', time.time() - tic, self.subdirs,
-                    self.sample_with_replacement, len(self.all_points))
-
-        # Shuffle the index deterministically (based on the number of examples)
-        self.shuffle_idx = list(range(len(self.all_points)))
-        random.Random(38383).shuffle(self.shuffle_idx)
-        self.cate_idx_lst = [self.cate_idx_lst[i] for i in self.shuffle_idx]
-        self.all_points = np.array([self.all_points[i] for i in self.shuffle_idx])
-        self.all_cate_mids = [self.all_cate_mids[i] for i in self.shuffle_idx]
-        if self.clip_forge_enable:
-            self.img_path = [self.img_path[i] for i in self.shuffle_idx]
-
-        # Normalization
-        # self.all_points = np.concatenate(self.all_points)  # (N, 15000, 3)
-        self.normalize_per_shape = normalize_per_shape
-        self.normalize_std_per_axis = normalize_std_per_axis
-        self.recenter_per_shape = recenter_per_shape
-        if self.normalize_shape_box:  # per shape normalization
-            B, N = self.all_points.shape[:2]
-            self.all_points_mean = (  # B,1,3
-                (np.amax(self.all_points, axis=1)).reshape(B, 1, input_dim) +
-                (np.amin(self.all_points, axis=1)).reshape(B, 1, input_dim)) / 2
-            self.all_points_std = np.amax(  # B,1,1
-                ((np.amax(self.all_points, axis=1)).reshape(B, 1, input_dim) -
-                 (np.amin(self.all_points, axis=1)).reshape(B, 1, input_dim)),
-                axis=-1).reshape(B, 1, 1) / 2
-        elif self.normalize_per_shape:  # per shape normalization
-            B, N = self.all_points.shape[:2]
-            self.all_points_mean = self.all_points.mean(axis=1).reshape(
-                B, 1, input_dim)
-            logger.info('all_points shape: {}. mean over axis=1',
-                        self.all_points.shape)
-            if normalize_std_per_axis:
-                self.all_points_std = self.all_points.reshape(
-                    B, N, -1).std(axis=1).reshape(B, 1, input_dim)
-            else:
-                self.all_points_std = self.all_points.reshape(
-                    B, -1).std(axis=1).reshape(B, 1, 1)
-        elif all_points_mean is not None and all_points_std is not None and not self.recenter_per_shape:
-            # using loaded dataset stats
-            self.all_points_mean = all_points_mean
-            self.all_points_std = all_points_std
-        elif self.recenter_per_shape:  # per shape center
-            # TODO: bounding box scale at the large dim and center
-            B, N = self.all_points.shape[:2]
-            self.all_points_mean = (
-                (np.amax(self.all_points, axis=1)).reshape(B, 1, input_dim) +
-                (np.amin(self.all_points, axis=1)).reshape(B, 1,
-                                                           input_dim)) / 2
-            self.all_points_std = np.amax(
-                ((np.amax(self.all_points, axis=1)).reshape(B, 1, input_dim) -
-                 (np.amin(self.all_points, axis=1)).reshape(B, 1, input_dim)),
-                axis=-1).reshape(B, 1, 1) / 2
-        # else:  # normalize across the dataset
-        elif normalize_global:  # normalize across the dataset
-            self.all_points_mean = self.all_points.reshape(
-                -1, input_dim).mean(axis=0).reshape(1, 1, input_dim)
-
-            if normalize_std_per_axis:
-                self.all_points_std = self.all_points.reshape(
-                    -1, input_dim).std(axis=0).reshape(1, 1, input_dim)
-            else:
-                self.all_points_std = self.all_points.reshape(-1).std(
-                    axis=0).reshape(1, 1, 1)
-
-            logger.info('[DATA] normalize_global: mean={}, std={}',
-                        self.all_points_mean.reshape(-1),
-                        self.all_points_std.reshape(-1))
-        else:
-            raise NotImplementedError('No Normalization')
-        self.all_points = (self.all_points - self.all_points_mean) / \
-            self.all_points_std
-        logger.info('[DATA] shape={}, all_points_mean:={}, std={}, max={:.3f}, min={:.3f}; num-pts={}',
-                    self.all_points.shape,
-                    self.all_points_mean.shape, self.all_points_std.shape,
-                    self.all_points.max(), self.all_points.min(), tr_sample_size)
-
-        if OVERFIT:
-            self.all_points = self.all_points[:40]
-
-        # TODO: why do we need this??
-        self.train_points = self.all_points[:, :min(
-            10000, self.all_points.shape[1])]  # subsample 15k points to 10k points per shape
-        self.tr_sample_size = min(10000, tr_sample_size)
-        self.te_sample_size = min(5000, te_sample_size)
-        assert self.scale == 1, "Scale (!= 1) is deprecated"
-
-        # Default display axis order
-        self.display_axis_order = [0, 1, 2]
-
-    def get_pc_stats(self, idx):
-        if self.recenter_per_shape:
-            m = self.all_points_mean[idx].reshape(1, self.input_dim)
-            s = self.all_points_std[idx].reshape(1, -1)
-            return m, s
-
-        if self.normalize_per_shape or self.normalize_shape_box:
-            m = self.all_points_mean[idx].reshape(1, self.input_dim)
-            s = self.all_points_std[idx].reshape(1, -1)
-            return m, s
-
-        return self.all_points_mean.reshape(1, -1), \
-            self.all_points_std.reshape(1, -1)
+        return sample
 
     def __len__(self):
-        return len(self.train_points)
+        return self.vertices_c_bounds.shape[0] - 1
 
-    def __getitem__(self, idx):
-        output = {}
-        tr_out = self.train_points[idx]
-        if self.random_subsample and self.sample_with_replacement:
-            tr_idxs = np.random.choice(tr_out.shape[0], self.tr_sample_size)
-        elif self.random_subsample and not self.sample_with_replacement:
-            tr_idxs = np.random.permutation(
-                np.arange(tr_out.shape[0]))[:self.tr_sample_size]
-        else:
-            tr_idxs = np.arange(self.tr_sample_size)
-        tr_out = torch.from_numpy(tr_out[tr_idxs, :]).float()
-        m, s = self.get_pc_stats(idx)
+    def __getitem__(self, i):
+        # Random seeding
+        np.random.seed((i * 31 + os.getpid()) % (2**32 - 1))
 
-        cate_idx = self.cate_idx_lst[idx]
-        sid, mid = self.all_cate_mids[idx]
-        input_pts = tr_out
-    
-        output.update(
-            {
-                'idx': idx,
-                'select_idx': tr_idxs,
-                'tr_points': tr_out,
-                'input_pts': input_pts,
-                'mean': m,
-                'std': s,
-                'cate_idx': cate_idx,
-                'sid': sid,
-                'mid': mid,
-                'display_axis_order': self.display_axis_order
-            })
+        if self.data_file is None:
+            self.data_file = h5.File(os.path.join(self.path2data, self.meshes_fname), 'r', libver='latest', swmr=True)
+
+        group = self.data_file[self.part]
         
-        return output
+        vertices_c = np.array(
+            group['vertices_c'][self.vertices_c_bounds[i]:self.vertices_c_bounds[i + 1]],
+            dtype=np.float32
+        )
+        faces_vc = np.array(
+            group['faces_vc'][self.faces_bounds[i]:self.faces_bounds[i + 1]],
+            dtype=np.uint32
+        )
+
+        sample = self.sample_cloud(
+            vertices_c, faces_vc,
+            size=self.cloud_size,
+            return_eval_cloud=self.return_eval_cloud
+        )
+
+        if self.return_original_scale:
+            sample['orig_c'] = self.original_centers[i]
+            sample['orig_s'] = self.original_scales[i]
+
+        if self.return_bbox_scale:
+            sample['bbox_c'] = self.bbox_centers[i]
+            sample['bbox_s'] = self.bbox_scales[i]
+
+        if self.cloud_transform is not None:
+            sample = self.cloud_transform(sample)
+
+        return sample
 
 def get_datasets(cfg, args):
     """
         cfg: config.data sub part 
     """
-    if OVERFIT:
-        random_subsample = 0
-    else:
-        random_subsample = cfg.random_subsample
-    logger.info(f'get_datasets: tr_sample_size={cfg.tr_max_sample_points}, '
-                f' te_sample_size={cfg.te_max_sample_points}; '
-                f' random_subsample={random_subsample}'
-                f' normalize_global={cfg.normalize_global}'
-                f' normalize_std_per_axix={cfg.normalize_std_per_axis}'
-                f' normalize_per_shape={cfg.normalize_per_shape}'
-                f' recenter_per_shape={cfg.recenter_per_shape}'
+    logger.info(f'get_datasets: tr_sample_size={cfg.n_sample_points}, '
+                f' te_sample_size={cfg.n_sample_points}; '
                 )
     kwargs = {}
     tr_dataset = PointClouds(
-        categories=cfg.cates,
-        split='train',
-        tr_sample_size=cfg.tr_max_sample_points,
-        te_sample_size=cfg.te_max_sample_points,
-        sample_with_replacement=cfg.sample_with_replacement,
-        scale=cfg.dataset_scale,  # root_dir=cfg.data_dir,
-        normalize_shape_box=cfg.normalize_shape_box,
-        normalize_per_shape=cfg.normalize_per_shape,
-        normalize_std_per_axis=cfg.normalize_std_per_axis,
-        normalize_global=cfg.normalize_global,
-        recenter_per_shape=cfg.recenter_per_shape,
-        random_subsample=random_subsample,
-        clip_forge_enable=cfg.clip_forge_enable,
-        clip_model=cfg.clip_model,
+        path2data=cfg.data_dir,
+        part='train',
+        meshes_fname=getattr(cfg, 'meshes_fname', 'dataset.h5'),
+        cloud_size=cfg.n_sample_points,
+        return_eval_cloud=True,  # Need both cloud and eval_cloud for training
+        return_original_scale=False,  # No scales needed for training
+        return_bbox_scale=False,  # No scales needed for training
+        cloud_transform=getattr(cfg, 'cloud_transform', None),
         **kwargs)
 
     eval_split = getattr(args, "eval_split", "val")
-    # te_dataset has random_subsample as False, therefore not using sample_with_replacement
     te_dataset = PointClouds(
-        categories=cfg.cates,
-        split=eval_split,
-        tr_sample_size=cfg.tr_max_sample_points,
-        te_sample_size=cfg.te_max_sample_points,
-        scale=cfg.dataset_scale,  # root_dir=cfg.data_dir,
-        normalize_shape_box=cfg.normalize_shape_box,
-        normalize_per_shape=cfg.normalize_per_shape,
-        normalize_std_per_axis=cfg.normalize_std_per_axis,
-        normalize_global=cfg.normalize_global,
-        recenter_per_shape=cfg.recenter_per_shape,
-        all_points_mean=tr_dataset.all_points_mean,
-        all_points_std=tr_dataset.all_points_std,
-        clip_forge_enable=cfg.clip_forge_enable,
-        clip_model=cfg.clip_model,
+        path2data=cfg.data_dir,
+        part=eval_split,
+        meshes_fname=getattr(cfg, 'meshes_fname', 'dataset.h5'),
+        cloud_size=cfg.n_sample_points,
+        return_eval_cloud=False,  # No eval_cloud needed for evaluation
+        return_original_scale=True,  # Need scales for evaluation
+        return_bbox_scale=True,  # Need scales for evaluation
+        cloud_transform=None,
     )
     return tr_dataset, te_dataset
 

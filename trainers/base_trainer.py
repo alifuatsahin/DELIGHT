@@ -23,9 +23,10 @@ class BaseTrainer(ABC):
         self.train_loader, self.test_loader = None, None
         self.local_rank = args.local_rank
         self.writer = None
-        self.num_points = self.cfg.data.sample_points
+        self.num_points = cfg.data.n_sample_points
         self.best_eval_epoch = 0
         self.best_eval_score = -1
+        self.start_epoch = 1
 
     @abstractmethod
     def train_iter(self, batch, step):
@@ -38,6 +39,12 @@ class BaseTrainer(ABC):
     @abstractmethod
     def eval(self, *args, **kwargs):
         pass
+
+    def log_loss(self, loss_dict, writer=None, step=None):
+        """Log loss values to writer"""
+        if writer is not None:
+            for key, value in loss_dict.items():
+                writer.add_scalar(f'train/{key}', value, step)
 
     def set_writer(self, writer):
         self.writer = writer
@@ -52,7 +59,7 @@ class BaseTrainer(ABC):
         if writer is not None:
             writer.upload_meter(step=epoch)
 
-    def save(self, epoch=None, step=None, save_dir=None):
+    def save(self, epoch=None, step=None, save_dir=None, save_name=None):
         data = {
             'optimizer': self.optimizer.state_dict(),
             'model': self.model.state_dict(),
@@ -60,7 +67,7 @@ class BaseTrainer(ABC):
             'step': step,
         }
         save_dir = self.cfg.save_dir if save_dir is None else save_dir
-        save_name = "epoch_%s_iters_%s.pt" % (epoch, step)
+        save_name = "epoch_%s_iters_%s.pt" % (epoch, step) if save_name is None else save_name
         path = os.path.join(save_dir, "checkpoints", save_name)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         logger.info(f"Saving checkpoint to {path}")
@@ -70,7 +77,9 @@ class BaseTrainer(ABC):
 
     def build_data(self):
         logger.info('Building data loader...')
-        train_loader, test_loader = dataset.get_data_loaders(self.cfg, self.args)
+        loaders = dataset.get_data_loaders(self.cfg, self.args)
+        train_loader = loaders['train_loader']
+        test_loader = loaders['test_loader']
 
         return train_loader, test_loader
     
@@ -79,7 +88,7 @@ class BaseTrainer(ABC):
         writer = self.writer
         train_loader = self.train_loader
 
-        logger.info('[GPU {}] Starting training for {} epochs'.format(args.rank, cfg.epochs))
+        logger.info('[GPU {}] Starting training for {} epochs'.format(args.rank, cfg.training.epochs))
 
         tic_global = time.time()
         if args.rank == 0:
@@ -103,10 +112,10 @@ class BaseTrainer(ABC):
                 if args.rank == 0 and self.writer is not None:
                     tic_iter = time.time()
 
-                logs_info = self.train_iter(batch, step=step)
+                loss = self.train_iter(batch, step=step)
 
                 if args.rank == 0:
-                    epoch_loss.append(logs_info['loss'])
+                    epoch_loss.append(loss)
 
                 if self.args.rank == 0 and (
                         time.time() - tic_log > 60
@@ -141,25 +150,24 @@ class BaseTrainer(ABC):
                 avg_time.update(epo_time)
                 logger.info(
                     f'E{epoch} iter[{idx}/{len(train_loader)}] | [Loss] {np.array(epoch_loss).mean():.2f} | '
-                    f'[exp] {cfg.save_dir} | [step] {step:5d} | [time] {epo_time:.1f}m (~{int(avg_time.avg * (cfg.trainer.epochs - epoch) / 60)}h) | '
+                    f'[exp] {cfg.save_dir} | [step] {step:5d} | [time] {epo_time:.1f}m (~{int(avg_time.avg * (cfg.training.epochs - epoch) / 60)}h) | '
                     f'[best] {self.best_eval_epoch} {self.best_eval_score * 1e2:.3f}x1e-2'
                 )
                 tic_log = time.time()
 
             if epoch % int(cfg.save_freq) == 0 and int(cfg.save_freq) > 0 and args.rank == 0:
-                save_path = self.save(epoch=epoch, step=step, save_dir=cfg.save_dir)
+                save_path = self.save(epoch=epoch, step=step)
                 logger.info(f"Checkpoint saved at {save_path} [Epoch] {epoch}")
-                self.save(epoch=epoch, step=step)
             
             if (time.time() - tic_global) / 60 > cfg.save_time and args.rank == 0:
-                save_path = self.save(epoch=epoch, step=step)
+                save_path = self.save(epoch=epoch, step=step, save_name='snapshot.pth')
                 logger.info(f"Checkpoint saved at {save_path}, [Time] {(time.time() - start_time) / 60}h")
                 tic_global = time.time()
 
             if int(cfg.val_freq) > 0 and epoch % int(cfg.val_freq) == 0 and args.rank == 0:
                 score = self.eval_nll(epoch=epoch, step=step)
                 if score < self.best_eval_score or self.best_eval_score < 0:
-                    self.save(save_name='best_eval.pth',  # save_dir=snapshot_dir,
+                    self.save(save_name='best_eval.pth',
                               epoch=epoch, step=step)
                     self.best_eval_score = score
                     self.best_eval_epoch = epoch
@@ -193,7 +201,7 @@ class BaseTrainer(ABC):
             x_list.append(input[b])
             name_list.append('Ground Truth')
 
-            label_list.appen(labels[b])
+            label_list.append(labels[b])
 
             x_list = normalize_point_clouds(x_list)
 
@@ -220,7 +228,7 @@ class BaseTrainer(ABC):
             x_list.append(sample)
             name_list.append(f"Sample {idx + 1}")
 
-            label_list.appen(label)
+            label_list.append(label)
 
             x_list = normalize_point_clouds(x_list)
 
@@ -231,12 +239,12 @@ class BaseTrainer(ABC):
         img_list = torchvision.utils.make_grid(
             [torch.as_tensor(a) for a in img_list], pad_value=0)
         
-        writer.add_image('vis_out/recont-train', img_list, step)
+        writer.add_image('vis_out/samples', img_list, step)
 
 
     # -- shared method for all model with vae component -- #
     @torch.no_grad()
-    def eval_nll(self, step):
+    def eval_nll(self, epoch=None, step=None):
         if self.cfg.training.opt.ema:
             self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
 
@@ -245,14 +253,17 @@ class BaseTrainer(ABC):
 
         gen_pcs, ref_pcs, label_pcs = [], [], []
 
-        data_loader = self.train_loader
+        data_loader = self.test_loader  # Use test loader for evaluation
 
         for vid, val_batch in enumerate(data_loader):
             if vid % 30 == 1:
                 logger.info('eval: {}/{}', vid, len(data_loader))
 
-            val_x = val_batch['tr_points'].to(device)
-            m, s = val_batch['mean'], val_batch['std']
+            val_x = val_batch['cloud'].to(device)  # Use 'cloud' key from your dataset
+            
+            # Check if normalization data exists in batch
+            m = val_batch.get('mean', torch.zeros_like(val_x[:, 0:1, :]))
+            s = val_batch.get('std', torch.ones_like(val_x[:, 0:1, :]))
 
             B, N, C = val_x.shape
             m = m.view(B, 1, -1)
