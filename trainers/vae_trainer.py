@@ -101,7 +101,7 @@ class Trainer(BaseTrainer):
         
         try:
             _, samples, labels, _ = self.model.sample(n_sampled_points, n_samples, deterministic=True)
-            output = samples.permute(0, 2, 1).contiguous()  # BN3->B3N
+            output = samples.permute(0, 2, 1).contiguous()  # B3N->BN3
         finally:
             # Always restore original parameters
             if self.cfg.training.opt.ema:
@@ -121,6 +121,7 @@ class Trainer(BaseTrainer):
         # For reconstruction evaluation, typically use current weights to measure training progress
         
         samples, labels, mixture_weights_logits = self.model.recont(x, deterministic=True)
+        samples = samples.permute(0, 2, 1).contiguous() # B3N -> BN3
 
         return samples, labels, mixture_weights_logits
     

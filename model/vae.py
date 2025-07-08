@@ -112,7 +112,6 @@ class VAE(nn.Module):
         output = {}
         batch_size = x.shape[0]
         
-        # Pre-expand parameters once for efficiency
         output['g_prior_mus'] = [self.latent_prior_mus.expand(batch_size, -1)]
         output['g_prior_logvars'] = [self.latent_prior_logvars.expand(batch_size, -1)]
 
@@ -284,7 +283,9 @@ class VAE(nn.Module):
         }
 
     def forward(self, p, g, n_sampled_points=None, warmup=False):
+        p = p.transpose(1, 2)
         sampled_cloud_size = p.shape[2] if n_sampled_points is None else n_sampled_points
+        print(f"Forward pass with sampled cloud size: {sampled_cloud_size}")
 
         output_encoder = self.encode(g)
         
