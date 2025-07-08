@@ -55,7 +55,7 @@ class Trainer(BaseTrainer):
         model = VAE(cfg, args)
 
         if args.distributed:
-            model = nn.parallel.DistributedDataParallel(model, device_ids=[args.rank], output_device=args.rank)
+            model = nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank], output_device=args.local_rank)
 
         return model
 
@@ -78,9 +78,6 @@ class Trainer(BaseTrainer):
             lossv = loss.detach().cpu().item()
 
         self.grad_scalar.scale(loss).backward()
-        utils.average_gradients(self.model.parameters(),
-                                self.args.distributed)
-
         self.grad_scalar.step(self.optimizer)
         self.grad_scalar.update()
 

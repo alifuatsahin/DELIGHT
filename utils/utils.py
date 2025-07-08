@@ -83,45 +83,6 @@ class AverageMeter:
         self.count += n
         self.avg = self.sum / self.count if self.count > 0 else 0
 
-
-def average_gradients(params, is_distributed):
-    """ Gradient averaging - optimized version. """
-    if not is_distributed:
-        return  # Early return for efficiency
-        
-    if isinstance(params, types.GeneratorType):
-        params = [p for p in params]
-
-    # Filter parameters that need gradients upfront
-    grad_params = [p for p in params if p.requires_grad and p.grad is not None]
-    if not grad_params:
-        return  # No gradients to average
-    
-    size = float(dist.get_world_size())
-    
-    # Pre-allocate lists with known size for efficiency
-    grad_data = []
-    grad_size = []
-    grad_shapes = []
-    
-    # Gather all grad values
-    for param in grad_params:
-        grad_size.append(param.grad.data.numel())
-        grad_shapes.append(param.grad.data.shape)  # Don't convert to list
-        grad_data.append(param.grad.data.flatten())
-    
-    # Concatenate and average
-    grad_data = torch.cat(grad_data, dim=0)
-    grad_data.div_(size)  # In-place division for efficiency
-    dist.all_reduce(grad_data, op=dist.ReduceOp.SUM)
-
-    # Put back the reduced grad values to parameters
-    base = 0
-    for i, param in enumerate(grad_params):
-        param.grad.data = grad_data[base:base + grad_size[i]].view(grad_shapes[i])
-        base += grad_size[i]
-
-
 def get_opt(params, cfgopt, use_ema, other_cfg=None):
     # Create optimizer
     if cfgopt.type == 'adam':
@@ -212,17 +173,28 @@ def get_opt(params, cfgopt, use_ema, other_cfg=None):
 
     return optimizer, scheduler
 
-def init_processes(rank, size, fn, args, config):
-    """ Initialize the distributed environment. """
-    os.environ['MASTER_ADDR'] = args.master_address
-    os.environ['MASTER_PORT'] = '6020'
-    logger.info('Set MASTER_PORT: {}, MASTER_PORT: {}', os.environ['MASTER_ADDR'], os.environ['MASTER_PORT'])
-
-    logger.info('Init Process: rank={}, world_size={}', rank, size)
-    torch.cuda.set_device(args.local_rank)
-    dist.init_process_group(
-        backend='nccl', init_method='env://', rank=rank, world_size=size)
-    fn(args, config)
-    logger.info('Barrier: rank={}, world_size={}', rank, size)
-    dist.barrier()
-    logger.info('Skip destroy_process_group: rank={}, world_size={}', rank, size)
+def init_processes(rank, size, args):
+    # Set device and initialize process group
+    if args.num_gpus >= 1:
+        torch.cuda.set_device(rank)  # Use rank directly for spawn
+        backend = 'nccl'
+    else:
+        backend = 'gloo'  # Fallback for CPU-only training
+        
+    if args.num_gpus > 1:
+        """ Initialize the distributed environment. """
+        os.environ['MASTER_ADDR'] = args.master_address
+        os.environ['MASTER_PORT'] = os.environ.get('MASTER_PORT', '6020')
+        logger.info('Set MASTER_ADDR: {}, MASTER_PORT: {}', os.environ['MASTER_ADDR'], os.environ['MASTER_PORT'])
+        
+        try:
+            dist.init_process_group(
+                backend=backend, init_method='env://', rank=rank, world_size=size)
+            logger.info('Init Process: rank={}, world_size={}', rank, size)
+        except Exception as e:
+            logger.error('Failed to initialize process group: {}', e)
+            raise
+    else:
+        logger.info('Single GPU training, no distributed initialization needed')
+        
+    logger.info('Process initialization completed for rank {}', rank)

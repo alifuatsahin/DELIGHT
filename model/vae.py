@@ -1,5 +1,5 @@
-from .encoder import Encoder
-from .decoder import Decoder
+from .VAE.encoder import Encoder
+from .VAE.decoder import Decoder
 from modules.flows import RealNVPFlowCouple
 from modules.layers import MLP
 

@@ -16,7 +16,7 @@ from utils.eval_helper import compute_NLL_metric
 class BaseTrainer(ABC):
     def __init__(self, cfg, args):
         self.cfg, self.args = cfg, args
-        self.device = torch.device('cuda:%d' % args.rank)
+        self.device = torch.device('cuda:%d' % args.local_rank) if torch.cuda.is_available() else 'cpu'
         self.scheduler = None
         self.optimizer = None
         self.model = None
@@ -88,10 +88,10 @@ class BaseTrainer(ABC):
         writer = self.writer
         train_loader = self.train_loader
 
-        logger.info('[GPU {}] Starting training for {} epochs'.format(args.rank, cfg.training.epochs))
+        logger.info('[GPU {}] Starting training for {} epochs'.format(args.local_rank, cfg.training.epochs))
 
         tic_global = time.time()
-        if args.rank == 0:
+        if args.global_rank == 0:
             tic_log = time.time()
             start_time = time.time()
         avg_time = AverageMeter()
@@ -102,22 +102,22 @@ class BaseTrainer(ABC):
         for epoch in range(self.start_epoch, cfg.training.epochs + 1):
             self.model.train()
 
-            if args.rank == 0:
+            if args.global_rank == 0:
                 tic_epo = time.time()
             epoch_loss = []
            
             for idx, batch in enumerate(train_loader):
                 step = idx + len(train_loader) * epoch
 
-                if args.rank == 0 and self.writer is not None:
+                if args.global_rank == 0 and self.writer is not None:
                     tic_iter = time.time()
 
                 loss = self.train_iter(batch, step=step)
 
-                if args.rank == 0:
+                if args.global_rank == 0:
                     epoch_loss.append(loss)
 
-                if self.args.rank == 0 and (
+                if self.args.global_rank == 0 and (
                         time.time() - tic_log > 60
                 ):  # log per min
                     logger.info(
@@ -127,7 +127,7 @@ class BaseTrainer(ABC):
                     tic_log = time.time()
 
                 # -- visualize rec and samples -- #
-                if step % int(cfg.log_freq) == 0 and args.rank == 0 and not step == 0:
+                if step % int(cfg.log_freq) == 0 and args.global_rank == 0 and not step == 0:
                     avg_loss = np.array(epoch_loss).mean()
                     epoch_loss = []  # clean up epoch loss
                     self.log_loss({'epo_loss': avg_loss},
@@ -141,11 +141,11 @@ class BaseTrainer(ABC):
                         self.model.train()
 
                 # -- timer -- #
-                if args.rank == 0 and self.writer is not None:
+                if args.global_rank == 0 and self.writer is not None:
                     time_iter = time.time() - tic_iter
                     self.writer.avg_meter('time_iter', time_iter, step=step)
 
-            if args.rank == 0 and self.writer is not None:
+            if args.global_rank == 0 and self.writer is not None:
                 epo_time = (time.time() - tic_epo) / 60.0  # min
                 avg_time.update(epo_time)
                 logger.info(
@@ -155,17 +155,17 @@ class BaseTrainer(ABC):
                 )
                 tic_log = time.time()
 
-            if epoch % int(cfg.save_freq) == 0 and int(cfg.save_freq) > 0 and args.rank == 0:
+            if epoch % int(cfg.save_freq) == 0 and int(cfg.save_freq) > 0 and args.global_rank == 0:
                 save_path = self.save(epoch=epoch, step=step)
                 logger.info(f"Checkpoint saved at {save_path} [Epoch] {epoch}")
             
-            if (time.time() - tic_global) / 60 > cfg.save_time and args.rank == 0:
+            if (time.time() - tic_global) / 60 > cfg.save_time and args.global_rank == 0:
                 save_path = self.save(epoch=epoch, step=step, save_name='snapshot.pth')
                 logger.info(f"Checkpoint saved at {save_path}, [Time] {(time.time() - start_time) / 60}h")
                 tic_global = time.time()
 
-            if int(cfg.val_freq) > 0 and epoch % int(cfg.val_freq) == 0 and args.rank == 0:
-                score = self.eval_nll(epoch=epoch, step=step)
+            if int(cfg.val_freq) > 0 and epoch % int(cfg.val_freq) == 0 and args.global_rank == 0:
+                score = self.eval_nll(step=epoch)
                 if score < self.best_eval_score or self.best_eval_score < 0:
                     self.save(save_name='best_eval.pth',
                               epoch=epoch, step=step)
@@ -174,7 +174,7 @@ class BaseTrainer(ABC):
 
             self.epoch_end(epoch, step=step)
 
-        if args.rank == 0:
+        if args.global_rank == 0:
             logger.info(f'Training finished, total time: {(time.time() - start_time) / 60:.2f} min')
             logger.info(f'Best eval score: {self.best_eval_score * 1e2:.3f}x1e-2 at epoch {self.best_eval_epoch}')
             self.writer.close() if hasattr(self, 'writer') else None
@@ -244,12 +244,11 @@ class BaseTrainer(ABC):
 
     # -- shared method for all model with vae component -- #
     @torch.no_grad()
-    def eval_nll(self, epoch=None, step=None):
+    def eval_nll(self, step=None):
         if self.cfg.training.opt.ema:
             self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
 
-        args = self.args
-        device = torch.device('cuda:%d' % args.rank)
+        device = self.device
 
         gen_pcs, ref_pcs, label_pcs = [], [], []
 
@@ -272,7 +271,7 @@ class BaseTrainer(ABC):
             inputs = val_batch['input_pts'].to(
                 device) if 'input_pts' in val_batch else None  # the noisy points
 
-            gen_x, labels, _ = self.eval(val_x, step=step, inputs=inputs, m=m, s=s)
+            gen_x, labels, _ = self.eval(val_x)
 
             gen_x = gen_x.cpu()
             val_x = val_x.cpu()

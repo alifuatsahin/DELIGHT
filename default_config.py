@@ -28,7 +28,7 @@ cfg.training = CN()
 cfg.training.batch_size = 32
 cfg.training.epochs = 100
 cfg.training.learning_rate = 0.001
-cfg.training.type = "trainers.vae_trainer"  # or "trainers.ldm_trainer"
+cfg.training.type = "trainers.vae_trainer"  # or "trainers.ddpm_trainer"
 
 cfg.training.opt = CN()
 cfg.training.opt.type = 'adamw'
@@ -45,6 +45,7 @@ cfg.training.opt.scheduler = ''
 
 # Add missing configuration
 cfg.save_dir = 'outputs'
+cfg.exp_name = ''
 cfg.log_freq = 100
 cfg.viz_freq = 1000
 cfg.save_freq = 10

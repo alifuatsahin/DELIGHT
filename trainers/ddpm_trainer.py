@@ -63,7 +63,7 @@ class Trainer(BaseTrainer):
         ddpm = LatentDiffusion(diff_model_config=diff_model_config, conditioning_key=None).to(self.device)
 
         if args.distributed:
-            ddpm = nn.parallel.DistributedDataParallel(ddpm, device_ids=[args.rank], output_device=args.rank)
+            ddpm = nn.parallel.DistributedDataParallel(ddpm, device_ids=[args.local_rank], output_device=args.local_rank)
 
         return ddpm, vae
     
@@ -84,9 +84,6 @@ class Trainer(BaseTrainer):
             lossv = loss.detach().cpu().item()
 
         self.grad_scalar.scale(loss).backward()
-        utils.average_gradients(self.model.parameters(),
-                                self.args.distributed)
-
         self.grad_scalar.step(self.optimizer)
         self.grad_scalar.update()
 
