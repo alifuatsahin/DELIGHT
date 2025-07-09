@@ -1,5 +1,3 @@
-from modules.layers import MLP
-
 import torch
 import torch.nn as nn
 
@@ -7,7 +5,6 @@ class Quantizer(nn.Module):
     def __init__(self, cfg, input_dim):
         super().__init__()
 
-        self.kl_weight = cfg.model.klquantizer.kl_weight
         self.latent_dim = cfg.model.latent_dim
 
         self.mlp = nn.Linear(input_dim, self.latent_dim * 2)
@@ -38,23 +35,24 @@ class Quantizer(nn.Module):
 
         kl_loss = self.compute_kl_loss(mus, log_vars)
 
-        return g_samples, kl_loss, (mus, log_vars)
+        info = {
+            "mean_mus": torch.mean(mus, dim=0).mean(),
+            "mean_logvars": torch.mean(log_vars, dim=0).mean(),
+        }
 
-    def compute_kl_loss(self, posterior_mus, posterior_logvars):
+        return g_samples, kl_loss, info
+
+    def compute_kl_loss(self, mus, logvars):
         """
         Compute the KL divergence loss for the quantizer.
         Args:
-            posterior_mus: Mean of the posterior distribution.
-            posterior_logvars: Log variance of the posterior distribution.
+            mus: Mean of the posterior distribution.
+            logvars: Log variance of the posterior distribution.
         Returns:
             kl_loss: Computed KL divergence loss.
         """
-        kl_loss = -0.5 * torch.sum(
-            1 + posterior_logvars 
-            - posterior_mus.pow(2) 
-            - posterior_logvars.exp()
-        )
-        return kl_loss * self.kl_weight
+        kl_loss = -0.5 * torch.sum(1 + logvars - mus.pow(2) - logvars.exp(), dim=1).mean()
+        return kl_loss
     
     @torch.no_grad()
     def sample(self, batch_size, device=None):

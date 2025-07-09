@@ -84,6 +84,7 @@ class BaseTrainer(ABC):
         step = 0
 
         self.total_iter = cfg.training.epochs * len(train_loader)
+        self.model.total_iter = self.total_iter
         
         for epoch in range(self.start_epoch, cfg.training.epochs + 1):
             self.model.train()
@@ -98,7 +99,7 @@ class BaseTrainer(ABC):
                 if args.global_rank == 0 and self.writer is not None:
                     tic_iter = time.time()
 
-                loss = self.train_iter(batch, step=step)
+                loss = self.train_iter(batch, step=step, epoch=epoch)
 
                 if args.global_rank == 0:
                     epoch_loss.append(loss)

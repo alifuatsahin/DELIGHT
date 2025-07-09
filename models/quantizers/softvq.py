@@ -8,7 +8,7 @@ class Quantizer(nn.Module):
         self.n_e = cfg.model.soft_vq.n_e
         self.e_dim = cfg.model.latent_dim 
         self.tau = cfg.model.soft_vq.tau
-        self.entropy_loss_ratio = cfg.training.opt.entropy_loss_ratio
+        self.entropy_loss_ratio = cfg.model.soft_vq.entropy_loss_ratio
         self.show_usage = cfg.model.soft_vq.show_usage
         self.l2_norm = cfg.model.soft_vq.l2_norm
 
@@ -30,7 +30,7 @@ class Quantizer(nn.Module):
             z: Input tensor of shape (B, latent_dim).
         """
 
-        assert features.dim() == 2, f"Expected input shape (B, input_dim), got {z.shape}"
+        assert features.dim() == 2, f"Expected input shape (B, input_dim), got {features.shape}"
 
         z = self.mlp(features)
 
@@ -59,30 +59,32 @@ class Quantizer(nn.Module):
             self.codebook_used[:-cur_len].copy_(self.codebook_used[cur_len:].clone())
             self.codebook_used[-cur_len:].copy_(indices)
 
-        # Calculate losses if training
-        if self.training:
-            entropy_loss = self.entropy_loss_ratio * self.compute_entropy_loss(logits.view(-1, self.n_e))
-        else:
-            entropy_loss = None
+        entropy_loss = self.entropy_loss_ratio * self.compute_entropy_loss(logits.view(-1, self.n_e))
 
         avg_probs = torch.mean(probs, dim=0).mean()  # Average probabilities
         max_probs = torch.max(probs, dim=0)[0].mean()  # Maximum probabilities
 
-        return z_q, entropy_loss, (avg_probs, max_probs, zq_z_cos)
+        info = {
+            "avg_probs": avg_probs,
+            "max_probs": max_probs,
+            "z_cos": zq_z_cos
+        }
 
-    def compute_entropy_loss(self, affinity, loss_type="softmax", temperature=0.01):
+        return z_q, entropy_loss, info
+
+    def compute_entropy_loss(self, affinity, temperature=0.005):
         flat_affinity = affinity.reshape(-1, affinity.shape[-1])
         flat_affinity /= temperature
         probs = F.softmax(flat_affinity, dim=-1)
         log_probs = F.log_softmax(flat_affinity + 1e-5, dim=-1)
-        if loss_type == "softmax":
-            target_probs = probs
-        else:
-            raise ValueError("Entropy loss {} not supported".format(loss_type))
+
+        target_probs = probs
+
         avg_probs = torch.mean(target_probs, dim=0)
         avg_entropy = - torch.sum(avg_probs * torch.log(avg_probs + 1e-6))
         sample_entropy = - torch.mean(torch.sum(target_probs * log_probs, dim=-1))
         loss = sample_entropy - avg_entropy
+        
         return loss
     
     @torch.no_grad()

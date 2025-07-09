@@ -87,11 +87,12 @@ class Trainer(BaseTrainer):
             self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[args.local_rank], output_device=args.local_rank)
 
 
-    def train_iter(self, batch, step):
+    def train_iter(self, batch, step, epoch):
         """ forward one iteration; and step optimizer  
         Args:
             data: (dict) tr_points shape: (B,N,3)
         """
+
         self.model.train()
         self.optimizer.zero_grad()
 
@@ -99,9 +100,9 @@ class Trainer(BaseTrainer):
         eval_pts = batch.get('eval_cloud', tr_pts).to(self.device)  # (B, Npoints, 3) - fallback to tr_pts if missing
 
         with autocast(self.device, enabled=True):
-            loss_dict = self.model(eval_pts, tr_pts)
+            logs_dict = self.model(eval_pts, tr_pts, epoch=epoch)
 
-            loss = loss_dict['loss']
+            loss = logs_dict['loss']
             lossv = loss.detach().cpu().item()
 
         self.grad_scalar.scale(loss).backward()
@@ -110,7 +111,7 @@ class Trainer(BaseTrainer):
 
         # Log metrics efficiently
         if self.writer is not None and step is not None:
-            for k, v in loss_dict.items():
+            for k, v in logs_dict.items():
                 v0 = v.mean().detach().cpu().item() if torch.is_tensor(v) else v
                 self.writer.avg_meter(k, v0, step=step)
 

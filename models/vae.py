@@ -4,16 +4,26 @@ from .quantizers import get_quantizer
 
 import torch
 import torch.nn as nn
+from loguru import logger
 
 class VAE(nn.Module):
     def __init__(self, cfg):
         super().__init__()
 
         self.latent_dim = cfg.model.latent_dim
-        self.cfg = cfg  # Store config for debugging
+        self.warmup_step = cfg.training.warmup
 
         self.encoder = Encoder(cfg.model.input_dim)
         self.decoder = Decoder(cfg.model)
+        
+        self.anneal_kl = cfg.model.anneal_kl
+        self.max_kl_coeff = cfg.model.max_kl_coeff
+        self.min_kl_coeff = cfg.model.min_kl_coeff
+        self.constant_portion = cfg.model.constant_portion
+        self.anneal_portion = cfg.model.anneal_portion
+        self.total_iter = 0
+
+        self.kl_weight = cfg.model.kl_weight
 
         self.quantizer = get_quantizer(cfg, self.encoder.out_features)
 
@@ -23,14 +33,14 @@ class VAE(nn.Module):
             x: input point clouds (B, N, 3)
         Returns:
             latent: sampled latent representation (B, latent_dim)
-            kl_loss: KL divergence loss for the quantizer
+            entropy_loss: KL divergence loss for the quantizer
         """
         encoded_features = self.encoder(x)
 
-        latent, kl_loss = self.quantizer(encoded_features)
+        latent, entropy_loss, info = self.quantizer(encoded_features)
 
-        return latent, kl_loss
-    
+        return latent, entropy_loss, info
+
     @torch.no_grad()
     def recont(self, pc):
         """
@@ -146,21 +156,43 @@ class VAE(nn.Module):
             'latent_dim': self.latent_dim,
             'model_device': str(next(self.parameters()).device)
         }
-    
 
-    def forward(self, p, g, n_sampled_points=None, warmup=False):
+    def get_kl_coeff(self, step):
+        constant_step = self.constant_portion * self.total_iter
+        anneal_portion = self.anneal_portion * self.total_iter
+        
+        if anneal_portion == 0:  # Avoid division by zero
+            logger.warning("Anneal portion is zero, using max KL coefficient.")
+            return self.max_kl_coeff
+            
+        return max(min(self.min_kl_coeff + (self.max_kl_coeff - self.min_kl_coeff) * (step - constant_step) / anneal_portion, self.max_kl_coeff), self.min_kl_coeff)
+
+    def forward(self, p, g, n_sampled_points=None, step=None):
         p = p.transpose(1, 2)
         sampled_cloud_size = p.shape[2] if n_sampled_points is None else n_sampled_points
-        print(f"Forward pass with sampled cloud size: {sampled_cloud_size}")
 
-        latent, kl_loss = self.encode(g)
-        
+        latent, entropy_loss, info = self.encode(g)
+
+        if self.anneal_kl:
+            kl_coeff = self.get_kl_coeff(step)
+        else:
+            kl_coeff = self.kl_weight
+
+        entropy_loss = kl_coeff * entropy_loss
+
+        if step is not None:
+            warmup = step < self.warmup_step
+        else:
+            warmup = False
+
         recont_loss = self.decoder(p, latent, sampled_cloud_size, warmup)
 
         output = {
-            "loss": recont_loss + kl_loss,
+            "loss": recont_loss + entropy_loss,
             "recont_loss": recont_loss,
-            "kl_loss": kl_loss
+            "entropy_loss": entropy_loss
         }
+
+        output.update(info)
 
         return output

@@ -103,7 +103,7 @@ class Trainer(BaseTrainer):
         if args.distributed:
             self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[args.local_rank], output_device=args.local_rank)
     
-    def train_iter(self, batch, step):
+    def train_iter(self, batch, step, epoch=None):
         """ forward one iteration; and step optimizer  
         Args:
             data: (dict) tr_points shape: (B,N,3)
