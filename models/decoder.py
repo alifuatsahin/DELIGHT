@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import math
 import numpy as np
 from typing import List, Tuple, Optional, Dict, Any
-from collections import OrderedDict
+from loguru import logger
 
 from modules.flows import CondRealNVPFlow3DTriple
 from modules.layers import MLP
@@ -28,27 +28,20 @@ class WeightsMLP(nn.Module):
         if n_layers > 0:
             self.features = nn.Sequential()
             for i in range(n_layers):
-                self.features.add_module('mlp{}'.format(i), nn.Linear(in_features, in_features, bias=False))
-                self.features.add_module('mlp{}_bn'.format(i), nn.LayerNorm(in_features))
+                self.features.add_module('mlp{}'.format(i), nn.Linear(in_features, in_features // 2, bias=False))
+                # self.features.add_module('mlp{}_bn'.format(i), nn.LayerNorm(in_features))
                 self.features.add_module('mlp{}_swish'.format(i), nn.GELU())
 
-        self.alphas = nn.Sequential(OrderedDict([
-            ('alpha_mlp0', nn.Linear(in_features, out_features, bias=True))
-        ]))
+        self.features.add_module('mlp_final', nn.Linear(in_features // 2 ** n_layers, out_features))
+        self.features.add_module('mlp_final_ac', nn.Softplus())
 
         with torch.no_grad():
-            self.alphas[-1].weight.data.normal_(std=alpha_weight_std)
-            nn.init.constant_(self.alphas[-1].bias.data, alpha_bias)
+            self.features[-2].weight.data.normal_(std=alpha_weight_std)
+            nn.init.constant_(self.features[-2].bias.data, alpha_bias)
 
     def forward(self, input):
-        if self.n_layers > 0:
-            features = self.features(input)
-        else:
-            features = input
-        raw_alphas = self.alphas(features)
-        alphas = F.softplus(raw_alphas)  + 1e-6
-        dirichlet = torch.distributions.Dirichlet(alphas)
-        weights = dirichlet.rsample()
+        mus = self.features(input) + 1
+        weights = nn.functional.log_softmax(mus, dim=-1)
 
         return weights
 
@@ -229,10 +222,11 @@ class Decoder(nn.Module):
             mixture_weights: weights for each flow (B, n_flows)
         """
         if warmup:
+            mixture_weights_logits = self.mixture_weights_enc(latent_vector)
             # Use uniform weights during warmup
             batch_size = latent_vector.shape[0]
-            return 0.99 * torch.ones(batch_size, self.n_flows, device=latent_vector.device) / self.n_flows \
-                    + 0.01 * self.mixture_weights_enc(latent_vector)
+            return torch.log(0.99 * torch.ones(batch_size, self.n_flows, device=latent_vector.device) / self.n_flows \
+                    + 0.01 * torch.exp(mixture_weights_logits))
         else:
             # Use learned weights based on latent vector
             return self.mixture_weights_enc(latent_vector)
@@ -278,10 +272,10 @@ class Decoder(nn.Module):
         device = latents.device
 
         # Get mixture weights for all samples at once
-        mixture_weights = self.get_weights(latents, warmup=False)
+        mixture_weights_logits = self.get_weights(latents, warmup=False)
         
         # Convert to probabilities
-        mixture_probs = mixture_weights.cpu().numpy()
+        mixture_probs = torch.exp(mixture_weights_logits).cpu().numpy()
 
         # Pre-allocate output tensors
         all_samples = torch.zeros(
@@ -366,7 +360,7 @@ class Decoder(nn.Module):
             - mixture_weights_logits: mixture weights (B, n_flows)
         """
         batch_size = g.shape[0]
-        mixture_weights = self.get_weights(g, warmup=warmup)
+        mixture_weights_logits = self.get_weights(g, warmup=warmup)
 
         # Each flow processes the same number of points during training
         n_sample_flow = [n_sampled_points] * self.n_flows
@@ -402,14 +396,16 @@ class Decoder(nn.Module):
                 
             output.append(flow_out)
 
-        recont_loss = self.get_pnll(output, mixture_weights)
+        recont_loss = self.get_pnll(output, mixture_weights_logits)
 
         return recont_loss
 
-    def get_pnll(self, output, mixture_weights):
-        log_weights = torch.log(mixture_weights + 1e-8)
+    def get_pnll(self, output, mixture_weights_logits):
+        mixture_weights_norm = (torch.logsumexp(mixture_weights_logits, dim=-1)).unsqueeze(-1)
+        weights_unnormed = torch.exp(mixture_weights_logits)
+        log_weights = torch.log(weights_unnormed) - mixture_weights_norm
         log_weights = log_weights.unsqueeze(1)
-        
+
         num_patches = len(output)
         num_batches = output[0]['p_prior_mus'][0].shape[0]
         pnll = []

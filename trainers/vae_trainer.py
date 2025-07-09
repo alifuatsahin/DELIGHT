@@ -109,12 +109,13 @@ class Trainer(BaseTrainer):
         self.grad_scalar.step(self.optimizer)
         self.grad_scalar.update()
 
+        logger.info(f"Reconstruction loss: {logs_dict['recont_loss']:.4f}")
+
         # Log metrics efficiently
         if self.writer is not None and step is not None:
             for k, v in logs_dict.items():
                 v0 = v.mean().detach().cpu().item() if torch.is_tensor(v) else v
                 self.writer.avg_meter(k, v0, step=step)
-                logger.info(f"Step {step}: {k} = {v0:.4f}")
 
         return lossv
     
