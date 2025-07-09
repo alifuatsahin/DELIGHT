@@ -4,27 +4,15 @@ from torch.amp import autocast, GradScaler
 import torch.distributed as dist
 from loguru import logger
 
-from model.vae import VAE
+from models.vae import VAE
 from .base_trainer import BaseTrainer
-from modules.losses import FlowMixtureLoss
 from utils import utils
 
 class Trainer(BaseTrainer):
     def __init__(self, cfg, args):
         super().__init__(cfg, args)
 
-        self.model = VAE(cfg, args)
-        
-        # Move model to device
-        self.model = self.model.to(self.device)
-
-        # Initialize loss function
-        self.loss_func = FlowMixtureLoss(
-            pnll_weight=cfg.training.opt.pnll_weight,
-            gnll_weight=cfg.training.opt.gnll_weight,
-            gent_weight=cfg.training.opt.entl_weight,
-            n_components=cfg.model.n_flows
-        )
+        self.build_model(cfg, args)
 
         # Initialize gradient scaler for mixed precision training
         self.grad_scalar = GradScaler(2**10, enabled=True)
@@ -52,12 +40,11 @@ class Trainer(BaseTrainer):
         if args.distributed:
             dist.barrier()
 
-        model = VAE(cfg, args)
+        self.model = VAE(cfg, args).to(self.device)  # Use eval mode for VAE during training
 
         if args.distributed:
-            model = nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank], output_device=args.local_rank)
+            self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[args.local_rank], output_device=args.local_rank)
 
-        return model
 
     def train_iter(self, batch, step):
         """ forward one iteration; and step optimizer  
@@ -71,8 +58,7 @@ class Trainer(BaseTrainer):
         eval_pts = batch.get('eval_cloud', tr_pts).to(self.device)  # (B, Npoints, 3) - fallback to tr_pts if missing
 
         with autocast(self.device, enabled=True):
-            output_encoder, output_decoder, mixture_weights_logits = self.model(eval_pts, tr_pts)
-            loss_dict = self.get_loss(output_encoder, output_decoder, mixture_weights_logits, writer=self.writer, it=step)
+            loss_dict = self.model(eval_pts, tr_pts)
 
             loss = loss_dict['loss']
             lossv = loss.detach().cpu().item()
@@ -97,7 +83,7 @@ class Trainer(BaseTrainer):
             self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
         
         try:
-            _, samples, labels, _ = self.model.sample(n_sampled_points, n_samples, deterministic=True)
+            samples, labels = self.model.sample(n_sampled_points, n_samples, deterministic=True)
             output = samples.permute(0, 2, 1).contiguous()  # B3N->BN3
         finally:
             # Always restore original parameters
@@ -117,24 +103,8 @@ class Trainer(BaseTrainer):
         """
         # For reconstruction evaluation, typically use current weights to measure training progress
         
-        samples, labels, mixture_weights_logits = self.model.recont(x, deterministic=True)
+        samples, labels = self.model.recont(x, deterministic=True)
         samples = samples.permute(0, 2, 1).contiguous() # B3N -> BN3
 
-        return samples, labels, mixture_weights_logits
-    
-    def get_loss(self, output_encoder, output_decoder, mixture_weights_logits, writer=None, it=None):
-        loss, pnll, gnll, entl = self.loss_func(
-            output_prior=output_encoder,
-            output_decoder=output_decoder,
-            mixture_weights_logits=mixture_weights_logits
-        )
-
-        output = {
-            'loss': loss,
-            'PNNL': pnll,
-            'GNNL': gnll,
-            'ENTL': entl
-        }
-
-        return output
+        return samples, labels
     

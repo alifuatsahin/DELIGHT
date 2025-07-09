@@ -168,6 +168,13 @@ def get_opt(params, cfgopt, use_ema, other_cfg=None):
             return lr / eta_max
         scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda_rule)
 
+    elif scheduler_type == 'cosine_anneal':
+        assert other_cfg is not None, "other_cfg required for cosine_anneal scheduler"
+        num_cycles = int(getattr(cfgopt, "num_cycles", 10))
+        total_epoch = int(other_cfg.training.epochs)  # CRITICAL: Need total training duration
+        T_max = total_epoch / num_cycles
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max, eta_min=eta_min)
+
     else:
         raise ValueError(f"Unsupported scheduler type: {scheduler_type}")
 

@@ -1,5 +1,4 @@
-from latent_diffusion.ldm.models.diffusion.ddpm import LatentDiffusion
-from model.vae import VAE
+from models import DDPM, VAE
 from .base_trainer import BaseTrainer
 
 import torch
@@ -13,7 +12,7 @@ class Trainer(BaseTrainer):
     def __init__(self, cfg, args):
         super().__init__(cfg, args)
 
-        self.model, self.vae = self.build_model()
+        self.build_model()
 
         # Initialize gradient scaler for mixed precision training
         self.grad_scalar = GradScaler(2**10, enabled=True)
@@ -42,8 +41,8 @@ class Trainer(BaseTrainer):
         if args.distributed:
             dist.barrier()
 
-        vae = VAE(cfg, args).eval().to(self.device)  # Use eval mode for VAE during training
-        vae.load_state_dict(torch.load(cfg.vae_checkpoint, map_location=self.device)["model_state_dict"], strict=True)
+        self.vae = VAE(cfg, args).eval().to(self.device)  # Use eval mode for VAE during training
+        self.vae.load_state_dict(torch.load(cfg.vae_checkpoint, map_location=self.device)["model_state_dict"], strict=True)
 
         if cfg.model.ldm_backbone == "unet1":
             diff_model_config = {"target": "ldm.modules.diffusionmodules.openaimodel.UNetModel",
@@ -60,12 +59,10 @@ class Trainer(BaseTrainer):
         else:
             raise NotImplementedError
         
-        ddpm = LatentDiffusion(diff_model_config=diff_model_config, conditioning_key=None).to(self.device)
+        self.model = DDPM(diff_model_config=diff_model_config, conditioning_key=None).to(self.device)
 
         if args.distributed:
-            ddpm = nn.parallel.DistributedDataParallel(ddpm, device_ids=[args.local_rank], output_device=args.local_rank)
-
-        return ddpm, vae
+            self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[args.local_rank], output_device=args.local_rank)
     
     def train_iter(self, batch, step):
         """ forward one iteration; and step optimizer  
@@ -122,7 +119,7 @@ class Trainer(BaseTrainer):
             
             # Decode the latents using the VAE
             with torch.no_grad():
-                samples, labels, _ = self.vae.decoder.decode(latents, n_sampled_points=n_sampled_points)
+                samples, labels = self.vae.decoder.decode(latents, n_sampled_points=n_sampled_points)
                 
         finally:
             # Always restore original parameters
@@ -146,10 +143,10 @@ class Trainer(BaseTrainer):
             self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
         
         try:
-            samples, labels, mixture_weights_logits = self.vae.recont(x, deterministic=True)
+            samples, labels = self.vae.recont(x, deterministic=True)
         finally:
             # Always restore original parameters
             if self.cfg.training.opt.ema:
                 self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
 
-        return samples, labels, mixture_weights_logits
+        return samples, labels

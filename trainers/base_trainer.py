@@ -185,7 +185,7 @@ class BaseTrainer(ABC):
         
         input = batch['cloud']
 
-        output, labels, _ = self.eval(input)
+        output, labels = self.eval(input)
 
         assert len(input.shape) == len(output.shape) == 3 # (B, Npoints, 3)
         assert input.shape[0] == output.shape[0]  # batch size should match
@@ -268,10 +268,7 @@ class BaseTrainer(ABC):
             m = m.view(B, 1, -1)
             s = s.view(B, 1, -1)
 
-            inputs = val_batch['input_pts'].to(
-                device) if 'input_pts' in val_batch else None  # the noisy points
-
-            gen_x, labels, _ = self.eval(val_x)
+            gen_x, labels = self.eval(val_x)
 
             gen_x = gen_x.cpu()
             val_x = val_x.cpu()

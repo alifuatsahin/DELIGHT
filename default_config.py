@@ -8,12 +8,20 @@ cfg.model.input_dim = 3
 cfg.model.n_flows = 4
 cfg.model.depth = 21
 cfg.model.feat_dim = 64
-cfg.model.extra_feature_channels = 0
-cfg.model.posterior_n_layers = 1
 cfg.model.point_prior_n_layers = 1
-cfg.model.weight_n_layers = 3
-cfg.model.prior_flow_depth = 7
-cfg.model.prior_feat_dim = 128
+cfg.model.weight_n_layers = 1
+cfg.model.quantizer = 'kl' # or 'softvq'
+
+cfg.model.klquantizer = CN()
+cfg.model.klquantizer.kl_weight = 0.5
+cfg.model.klquantizer.n_layers = 1
+
+cfg.model.soft_vq = CN()
+cfg.model.soft_vq.n_e = 1024  # Number of embeddings
+cfg.model.soft_vq.tau = 0.07  # Temperature for softmax
+cfg.model.soft_vq.entropy_loss_ratio = 0.01
+cfg.model.soft_vq.show_usage = True  # Track codebook usage
+cfg.model.soft_vq.l2_norm = False  # Normalize embeddings
 
 cfg.data = CN()
 cfg.data.dataset = 'shapenet'
@@ -36,12 +44,9 @@ cfg.training.opt.lr = 0.001
 cfg.training.opt.beta1 = 0.9
 cfg.training.opt.beta2 = 0.999
 cfg.training.opt.weight_decay = 0.01
-cfg.training.opt.pnll_weight = 1.0
-cfg.training.opt.gnll_weight = 1.0
-cfg.training.opt.entl_weight = 1.0
 cfg.training.opt.ema = True
 cfg.training.opt.ema_decay = 0.9999
-cfg.training.opt.scheduler = ''
+cfg.training.opt.scheduler = 'cosine_anneal_nocycle'
 
 # Add missing configuration
 cfg.save_dir = 'outputs'

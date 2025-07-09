@@ -1,4 +1,4 @@
-from model.vae import VAE
+from models.vae import VAE
 from default_config import cfg
 from utils.eval_helper import compute_NLL_metric
 
