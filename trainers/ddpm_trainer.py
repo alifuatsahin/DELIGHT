@@ -80,7 +80,7 @@ class Trainer(BaseTrainer):
         if args.distributed:
             dist.barrier()
 
-        self.vae = VAE(cfg, args).eval().to(self.device)  # Use eval mode for VAE during training
+        self.vae = VAE(cfg).eval().to(self.device)  # Use eval mode for VAE during training
         self.vae.load_state_dict(torch.load(cfg.vae_checkpoint, map_location=self.device)["model_state_dict"], strict=True)
 
         if cfg.model.ddpm_backbone == "unet1":
@@ -103,7 +103,7 @@ class Trainer(BaseTrainer):
         if args.distributed:
             self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[args.local_rank], output_device=args.local_rank)
     
-    def train_iter(self, batch, step, epoch=None):
+    def train_iter(self, batch, step):
         """ forward one iteration; and step optimizer  
         Args:
             data: (dict) tr_points shape: (B,N,3)
@@ -114,8 +114,8 @@ class Trainer(BaseTrainer):
         tr_pts = batch['cloud'].to(self.device)  # (B, Npoints, 3)
 
         with autocast(self.device, enabled=True):
-            output_encoder = self.vae.encode(tr_pts)
-            loss = self.model(output_encoder['g_posterior_mus'], None)
+            latent, _, _ = self.vae.encode(tr_pts)
+            loss = self.model(latent, None)
 
             lossv = loss.detach().cpu().item()
 

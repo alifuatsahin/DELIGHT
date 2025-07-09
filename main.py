@@ -14,9 +14,9 @@ if __name__ == "__main__":
     N = 2048  # Number of points, can be adjusted as needed
 
     p = torch.randn(B, N, input_dim, device=device)  # On CUDA if available
-    g = torch.randn(B, N, input_dim, device=device)
+    g = torch.randn(B, N, input_dim, device=device).permute(0, 2, 1)  # Change to (B, input_dim, N)
     labels = torch.randint(0, 4, (B, N), device=device)  # Random labels for testing
-    out_dict = model(p, g)
+    samples, labels = model.recont(g)
 
     # _, samples, labels, mixture_weights_logits = model.sample(n_sampled_points=N*2, n_samples=B)
     # print(f"Shape of the input point cloud: {p.shape}")
@@ -24,7 +24,7 @@ if __name__ == "__main__":
     # print(f"Shape of the labels: {labels.shape}")
     # print(f"Shape of the mixture weights logits: {mixture_weights_logits.shape}")    
 
-    print(f'Output dict: {out_dict}')
+    print(f'Samples Shape: {samples.shape}, Labels Shape: {labels.shape}')
 
     # p = p.permute(0, 2, 1)  # Change to (B, N, input_dim)
     # g = g.permute(0, 2, 1)  # Change to

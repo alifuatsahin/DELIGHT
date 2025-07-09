@@ -116,12 +116,6 @@ class Decoder(nn.Module):
         # Compute optimal parameters under budget
         self.flow_depth, self.feat_dim = self._get_decoder_params(min_feat_dim=4)
 
-        # Initialize learnable mixture weights (used during warmup)
-        self.mixture_weights = nn.Parameter(
-            torch.zeros(self.n_flows), 
-            requires_grad=True
-        )
-
         # Create decoder flows
         self.decoder = nn.ModuleList([
             DecBlock(
@@ -166,9 +160,6 @@ class Decoder(nn.Module):
         
     def _initialize_parameters(self):
         """Initialize decoder parameters."""
-        # Initialize mixture weights to uniform distribution
-        with torch.no_grad():
-            nn.init.constant_(self.mixture_weights, 1.0 / self.n_flows)
         
         # Initialize decoder blocks
         for decoder_block in self.decoder:
@@ -240,7 +231,8 @@ class Decoder(nn.Module):
         if warmup:
             # Use uniform weights during warmup
             batch_size = latent_vector.shape[0]
-            return torch.ones(batch_size, self.n_flows, device=latent_vector.device) / self.n_flows
+            return 0.99 * torch.ones(batch_size, self.n_flows, device=latent_vector.device) / self.n_flows \
+                    + 0.01 * self.mixture_weights_enc(latent_vector)
         else:
             # Use learned weights based on latent vector
             return self.mixture_weights_enc(latent_vector)

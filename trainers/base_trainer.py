@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 from loguru import logger
 
-from datasets import dataset
+from datasets.dataset import get_data_loaders
 from utils.utils import AverageMeter
 from utils.vis_helper import visualize_point_clouds_3d
 from utils.data_helper import normalize_point_clouds
@@ -17,11 +17,12 @@ from utils.eval_metrics import compute_all_metrics, jsd_between_point_cloud_sets
 class BaseTrainer(ABC):
     def __init__(self, cfg, args):
         self.cfg, self.args = cfg, args
-        self.device = torch.device('cuda:%d' % args.local_rank) if torch.cuda.is_available() else 'cpu'
+        self.device = torch.device(f"cuda:{args.local_rank}") if torch.cuda.is_available() else 'cpu'
+        self.device_str = 'cuda' if self.device.type == 'cuda' else 'cpu'
         self.scheduler = None
         self.optimizer = None
         self.model = None
-        self.train_loader, self.test_loader = None, None
+        self.train_loader, self.test_loader, self.val_loader = None, None, None
         self.local_rank = args.local_rank
         self.writer = None
         self.num_points = cfg.data.n_sample_points
@@ -53,16 +54,16 @@ class BaseTrainer(ABC):
     def epoch_end(self, epoch, writer=None):
         # Signal now that the epoch ends....
         if self.scheduler is not None:
-            self.scheduler.step(epoch=epoch)
+            self.scheduler.step()
             if writer is not None:
                 writer.add_scalar(
-                    'train/opt_lr', self.scheduler.get_lr()[0], epoch)
+                    'train/opt_lr', self.scheduler.get_last_lr()[0], epoch)
         if writer is not None:
             writer.upload_meter(step=epoch)
 
     def build_data(self):
         logger.info('Building data loader...')
-        loaders = dataset.get_data_loaders(self.cfg, self.args)
+        loaders = get_data_loaders(self.cfg.data, self.args)
         train_loader = loaders['train_loader']
         test_loader = loaders['test_loader']
         val_loader = loaders['val_loader']
@@ -84,8 +85,12 @@ class BaseTrainer(ABC):
         step = 0
 
         self.total_iter = cfg.training.epochs * len(train_loader)
-        self.model.total_iter = self.total_iter
-        
+        if hasattr(self.model, 'module'):
+            self.model.module.total_iter = self.total_iter
+        else:
+            # For single GPU models
+            self.model.total_iter = self.total_iter
+
         for epoch in range(self.start_epoch, cfg.training.epochs + 1):
             self.model.train()
 
@@ -99,7 +104,7 @@ class BaseTrainer(ABC):
                 if args.global_rank == 0 and self.writer is not None:
                     tic_iter = time.time()
 
-                loss = self.train_iter(batch, step=step, epoch=epoch)
+                loss = self.train_iter(batch, step=step)
 
                 if args.global_rank == 0:
                     epoch_loss.append(loss)
@@ -159,7 +164,7 @@ class BaseTrainer(ABC):
                     self.best_eval_score = score
                     self.best_eval_epoch = epoch
 
-            self.epoch_end(epoch, step=step)
+            self.epoch_end(epoch, writer=writer)
 
         if args.global_rank == 0:
             logger.info(f'Training finished, total time: {(time.time() - start_time) / 60:.2f} min')
@@ -170,8 +175,7 @@ class BaseTrainer(ABC):
     def vis_recont(self, batch, writer=None, step=None):
         """ Visualize reconstruction results """
         
-        input = batch['cloud']
-
+        input = batch['cloud'].to(self.device)
         output, labels = self.eval(input)
 
         assert len(input.shape) == len(output.shape) == 3 # (B, Npoints, 3)
@@ -189,6 +193,7 @@ class BaseTrainer(ABC):
             name_list.append('Ground Truth')
 
             label_list.append(labels[b])
+            label_list.append(None) # No label for ground truth
 
             x_list = normalize_point_clouds(x_list)
 
@@ -210,7 +215,7 @@ class BaseTrainer(ABC):
         samples, labels = self.sample(n_sampled_points, n_samples)
 
         img_list = []
-        for idx, sample, label in enumerate(zip(samples, labels)):
+        for idx, (sample, label) in enumerate(zip(samples, labels)):
             x_list, name_list, label_list = [], [], []
 
             x_list.append(sample)

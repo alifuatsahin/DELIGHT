@@ -13,7 +13,7 @@ class Trainer(BaseTrainer):
     def __init__(self, cfg, args):
         super().__init__(cfg, args)
 
-        self.build_model(cfg, args)
+        self.build_model()
 
         # Initialize gradient scaler for mixed precision training
         self.grad_scalar = GradScaler(2**10, enabled=True)
@@ -81,13 +81,13 @@ class Trainer(BaseTrainer):
         if args.distributed:
             dist.barrier()
 
-        self.model = VAE(cfg, args).to(self.device)  # Use eval mode for VAE during training
+        self.model = VAE(cfg).to(self.device)
 
         if args.distributed:
             self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[args.local_rank], output_device=args.local_rank)
 
 
-    def train_iter(self, batch, step, epoch):
+    def train_iter(self, batch, step):
         """ forward one iteration; and step optimizer  
         Args:
             data: (dict) tr_points shape: (B,N,3)
@@ -99,8 +99,8 @@ class Trainer(BaseTrainer):
         tr_pts = batch['cloud'].to(self.device)  # (B, Npoints, 3)
         eval_pts = batch.get('eval_cloud', tr_pts).to(self.device)  # (B, Npoints, 3) - fallback to tr_pts if missing
 
-        with autocast(self.device, enabled=True):
-            logs_dict = self.model(eval_pts, tr_pts, epoch=epoch)
+        with autocast(self.device_str, enabled=True):
+            logs_dict = self.model(eval_pts, tr_pts, step=step)
 
             loss = logs_dict['loss']
             lossv = loss.detach().cpu().item()
@@ -114,6 +114,7 @@ class Trainer(BaseTrainer):
             for k, v in logs_dict.items():
                 v0 = v.mean().detach().cpu().item() if torch.is_tensor(v) else v
                 self.writer.avg_meter(k, v0, step=step)
+                logger.info(f"Step {step}: {k} = {v0:.4f}")
 
         return lossv
     
@@ -125,10 +126,12 @@ class Trainer(BaseTrainer):
             self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
         
         try:
-            samples, labels = self.model.sample(n_sampled_points, n_samples)
+            if hasattr(self.model, 'module'):
+                samples, labels = self.model.module.sample(n_sampled_points, n_samples)
+            else:
+                samples, labels = self.model.sample(n_sampled_points, n_samples)
             output = samples.permute(0, 2, 1).contiguous()  # B3N->BN3
         finally:
-            # Always restore original parameters
             if self.cfg.training.opt.ema:
                 self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
 
@@ -144,9 +147,18 @@ class Trainer(BaseTrainer):
             use_ema: whether to use EMA weights
         """
         # For reconstruction evaluation, typically use current weights to measure training progress
-        
-        samples, labels = self.model.recont(x)
-        samples = samples.permute(0, 2, 1).contiguous() # B3N -> BN3
+        was_training = self.model.training
+        self.model.eval()
+        try:
+            if hasattr(self.model, 'module'):
+                samples, labels = self.model.module.recont(x)
+            else:
+                # For single GPU models
+                samples, labels = self.model.recont(x)
+            samples = samples.permute(0, 2, 1).contiguous() # B3N -> BN3
+        finally:
+            if was_training:
+                self.model.train()
 
         return samples, labels
     

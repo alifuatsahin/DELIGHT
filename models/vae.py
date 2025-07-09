@@ -11,7 +11,8 @@ class VAE(nn.Module):
         super().__init__()
 
         self.latent_dim = cfg.model.latent_dim
-        self.warmup_step = cfg.training.warmup
+        self.warmup_epochs = cfg.training.warmup
+        self.training_epochs = cfg.training.epochs
 
         self.encoder = Encoder(cfg.model.input_dim)
         self.decoder = Decoder(cfg.model)
@@ -26,6 +27,11 @@ class VAE(nn.Module):
         self.kl_weight = cfg.model.kl_weight
 
         self.quantizer = get_quantizer(cfg, self.encoder.out_features)
+
+    @property
+    def device(self):
+        """Get the device of the model parameters"""
+        return next(self.parameters()).device if self.parameters() else torch.device('cpu')
 
     def encode(self, x):
         """
@@ -57,9 +63,7 @@ class VAE(nn.Module):
         n_sampled_points = pc.shape[2]
 
         # For reconstruction, we want to use posterior mean (deterministic)
-        output_encoder = self.encode(pc)
-
-        g_sample, _, _ = self.quantizer(output_encoder)
+        g_sample, _, _ = self.encode(pc)
 
         samples, labels = self.decoder.decode(g_sample, n_sampled_points)
         
@@ -168,9 +172,8 @@ class VAE(nn.Module):
         return max(min(self.min_kl_coeff + (self.max_kl_coeff - self.min_kl_coeff) * (step - constant_step) / anneal_portion, self.max_kl_coeff), self.min_kl_coeff)
 
     def forward(self, p, g, n_sampled_points=None, step=None):
-        p = p.transpose(1, 2)
+        # p = p.transpose(1, 2)
         sampled_cloud_size = p.shape[2] if n_sampled_points is None else n_sampled_points
-
         latent, entropy_loss, info = self.encode(g)
 
         if self.anneal_kl:
@@ -181,7 +184,7 @@ class VAE(nn.Module):
         entropy_loss = kl_coeff * entropy_loss
 
         if step is not None:
-            warmup = step < self.warmup_step
+            warmup = step < (self.warmup_epochs * self.total_iter / self.training_epochs)
         else:
             warmup = False
 

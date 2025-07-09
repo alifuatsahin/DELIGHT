@@ -68,12 +68,3 @@ class Quantizer(nn.Module):
         sample = torch.randn(batch_size, self.latent_dim, device=device)
 
         return sample
-
-    @property
-    def device(self):
-        """Get the device of the model parameters"""
-        try:
-            return next(self.parameters()).device
-        except StopIteration:
-            # Fallback if no parameters
-            return torch.device('cpu')

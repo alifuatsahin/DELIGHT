@@ -94,15 +94,19 @@ class CondRealNVPFlow3D(nn.Module):
         logvar = torch.zeros_like(p)
         mu = torch.zeros_like(p)
 
-        logvar[:, self.warp_inds, :] = nn.functional.softsign(self.T_logvar_1(
+        logvar_warp = nn.functional.softsign(self.T_logvar_1(
             torch.add(self.eps, torch.exp(self.T_logvar_0_cond_w(g).unsqueeze(2))) *
             self.T_logvar_0(p[:, self.keep_inds, :].contiguous()) + self.T_logvar_0_cond_b(g).unsqueeze(2)
         ))
 
-        mu[:, self.warp_inds, :] = self.T_mu_1(
+        mu_warp = self.T_mu_1(
             torch.add(self.eps, torch.exp(self.T_mu_0_cond_w(g).unsqueeze(2))) *
             self.T_mu_0(p[:, self.keep_inds, :].contiguous()) + self.T_mu_0_cond_b(g).unsqueeze(2)
         )
+
+        # Safe assignment with dtype matching
+        logvar[:, self.warp_inds, :] = logvar_warp.to(logvar.dtype)
+        mu[:, self.warp_inds, :] = mu_warp.to(mu.dtype)
 
         logvar = logvar.contiguous()
         mu = mu.contiguous()

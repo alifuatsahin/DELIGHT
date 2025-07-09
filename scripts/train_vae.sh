@@ -1,58 +1,47 @@
 #!/bin/bash
 
+# SLURM Options
+#SBATCH -o delight.out-%j
+#SBATCH -c 10
+#SBATCH --gres=gpu:volta:2
 
+source /etc/profile
+module load anaconda/Python-ML-2025a
+module load cuda/12.2
+module load nccl/2.23.4-cuda12.2
 
-if [ -z "$1" ]; then
-    echo "Usage: $0 <NUM_GPUS> <DATASET> [additional options]"
-    echo "Example: $0 2 shapenet"
-    echo "Example: $0 1 shapenet --opt training.epochs 500 data.batch_size 8"
-    exit 1
-fi
+export TORCH_CUDA_ARCH_LIST="7.0"
+export TF_CPP_MIN_LOG_LEVEL=3
+export TF_ENABLE_ONEDNN_OPTS=0
+export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
-if [ -z "$2" ]; then
-    echo "Error: Dataset argument required"
-    echo "Usage: $0 <NUM_GPUS> <DATASET> [additional options]"
-    exit 1
-fi
+DATA="chair" # Default category, can be overridden by command line argument
+NGPU=2 # 
+num_node=1
+BS=16
+total_bs=$(( $NGPU * $BS ))
 
-# Parse arguments
-NGPU=$1
-DATASET=$2
-shift 2  # Remove first two arguments, rest will be passed to train.py
 
 # Configuration
 num_node=1
-BS=4
+BS=16
 total_bs=$(( $NGPU * $BS ))
 
-# Safety check for batch size
-if (( $total_bs > 128 )); then 
-    echo "[WARNING] Total batch_size ($total_bs) larger than 128 may lead to unstable training"
-    echo "Consider reducing batch size or number of GPUs"
-    read -p "Continue anyway? (y/N): " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
-fi
-
 # Base training command
-BASE_CMD="python train.py --num_gpus $NGPU --dataset $DATASET"
+BASE_CMD="python train.py --num_gpus $NGPU"
 
 # Default configuration overrides
 DEFAULT_OPTS=(
     "--opt"
     "data.batch_size" "$BS"
-    "data.num_workers" "4"
-    "training.epochs" "500"
+    "data.num_workers" "10"
+    "training.epochs" "1000"
     "training.opt.lr" "1e-4"
-    "training.opt.beta2" "0.99"
-    "model.latent_dim" "256"
-    "data.tr_max_sample_points" "3000"
-    "data.te_max_sample_points" "3000"
-    "data.random_subsample" "1"
-    "data.recenter_per_shape" "False"
-    "data.normalize_global" "True"
+    "model.latent_dim" "512"
+    "data.n_sample_points" "2048"
+    "data.categories" "$DATA"
+    "model.quantizer" "kl"
+    "training.type" "vae"
 )
 
 # Combine base command with default options and any additional arguments
@@ -62,7 +51,7 @@ echo "========================================="
 echo "DELIGHT Training Script"
 echo "========================================="
 echo "Number of GPUs: $NGPU"
-echo "Dataset: $DATASET"
+echo "Category: $DATA"
 echo "Batch size per GPU: $BS"
 echo "Total batch size: $total_bs"
 echo "Number of nodes: $num_node"

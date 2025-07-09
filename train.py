@@ -13,11 +13,11 @@ from utils import utils
 def main(args, config):
     logger.info('Training: {}', config.training.type)
 
-    trainer_lib = importlib.import_module(config.trainer.type)
+    trainer_lib = importlib.import_module(args.trainer_path)
     Trainer = trainer_lib.Trainer
     trainer = Trainer(config, args)
 
-    writer = utils.init(args.global_rank, config.save_dir)
+    writer = utils.init(args.global_rank, save_dir=config.save_dir)
 
     if args.global_rank == 0:
         trainer.set_writer(writer)
@@ -33,8 +33,9 @@ def main(args, config):
         args.pretrained = os.path.join(
             config.save_dir, 'checkpoints', 'snapshot.pth')
     else:
-        logger.info('Could not find any checkpoint: {}, (exist={}), or snapshot {}, (exist={})',
-                    ckpt_dir, os.path.exists(ckpt_dir), snapshot_file, os.path.exists(snapshot_file))
+        if args.global_rank == 0:
+            logger.info('Could not find any checkpoint: {}, (exist={}), or snapshot {}, (exist={})',
+                        ckpt_dir, os.path.exists(ckpt_dir), snapshot_file, os.path.exists(snapshot_file))
 
     if args.resume or args.eval:
         assert args.pretrained is not None, "Pretrained model path must be provided for resuming."
@@ -63,8 +64,6 @@ def get_args():
     parser.add_argument('--num_gpus', type=int, default=1,
                         help='Number of GPUs to use for training')
     parser.add_argument('--exp_root', type=str, default='../experiments')
-    parser.add_argument('--dataset', type=str, required=True, 
-                        help='Which dataset to use')
     parser.add_argument('--resume', default=False, action='store_true')
     parser.add_argument('--pretrained', type=str, default=None,
                         help='Path to the pretrained model for resuming training or evaluation')
@@ -92,6 +91,8 @@ def get_args():
 
     args = parser.parse_args()
 
+    args.trainer_path = "trainers." + config.training.type + "_trainer"
+
     if args.eval or args.resume:
         logger.info('Arguments: {}'.format(args))
         args.config = os.path.dirname(args.pretrained) + '/../cfg.yaml'
@@ -104,7 +105,7 @@ def get_args():
         
         # Build detailed experiment name
         exp_components = [
-            config.dataset,
+            config.data.categories,
             f"bs{config.data.batch_size}",
             timestamp
         ]
@@ -141,7 +142,7 @@ def get_args():
         exp_info_file = os.path.join(config.log_dir, 'experiment_info.txt')
         with open(exp_info_file, 'w') as f:
             f.write(f"Experiment Name: {config.exp_name}\n")
-            f.write(f"Dataset: {config.dataset}\n")
+            f.write(f"Dataset: {config.data.categories}\n")
             f.write(f"Training Type: {config.training.type}\n")
             f.write(f"Batch Size: {config.data.batch_size}\n")
             f.write(f"Learning Rate: {config.training.opt.lr}\n")

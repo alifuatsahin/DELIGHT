@@ -6,8 +6,18 @@ class Quantizer(nn.Module):
     def __init__(self, cfg, input_dim):
         super().__init__()
         self.n_e = cfg.model.soft_vq.n_e
-        self.e_dim = cfg.model.latent_dim 
-        self.tau = cfg.model.soft_vq.tau
+        self.e_dim = cfg.model.latent_dim
+
+        self.learnable = cfg.model.soft_vq.learnable
+        self.tau_min = cfg.model.soft_vq.tau_min
+        self.tau_max = cfg.model.soft_vq.tau_max
+        self.initial_tau = cfg.model.soft_vq.tau
+        if self.learnable:
+            self.log_tau = nn.Parameter(
+                torch.log(torch.tensor(self.initial_tau, dtype=torch.float32)), 
+                requires_grad=True
+            )
+
         self.entropy_loss_ratio = cfg.model.soft_vq.entropy_loss_ratio
         self.show_usage = cfg.model.soft_vq.show_usage
         self.l2_norm = cfg.model.soft_vq.l2_norm
@@ -24,6 +34,13 @@ class Quantizer(nn.Module):
         if self.show_usage:
             self.register_buffer("codebook_used", torch.zeros(65536))
 
+    @property
+    def tau(self):
+        if self.learnable:
+            return torch.clamp(torch.exp(self.log_tau), min=self.tau_min, max=self.tau_max)  # Ensure tau is positive and bounded
+        else:
+            return self.initial_tau
+
     def forward(self, features):
         """
         Args:
@@ -37,12 +54,16 @@ class Quantizer(nn.Module):
         batch_size, embedding_dim = z.shape
         assert embedding_dim == self.e_dim, f"Expected input dimension {self.e_dim}, got {embedding_dim}"
 
-        embedding = F.normalize(self.embedding, p=2, dim=-1) if self.l2_norm else self.embedding  # Normalize embedding
-        z = F.normalize(z, p=2, dim=-1) if self.l2_norm else z  # Normalize input
+        if self.l2_norm:
+            embedding = F.normalize(self.embedding.clone(), p=2, dim=-1)  # Add .clone()
+            z = F.normalize(z, p=2, dim=-1)
+        else:
+            embedding = self.embedding  # This is fine
 
         logits = torch.einsum('be, ne -> bn', z, embedding.detach())  # Compute logits
 
-        probs = F.softmax(logits / self.tau, dim=-1)  # Compute probabilities
+        current_tau = self.tau
+        probs = F.softmax(logits / current_tau, dim=-1)  # Compute probabilities
 
         z_q = torch.einsum('bn, ne -> be', probs, embedding)  # Quantize input
         z_q = z_q.view(batch_size, self.e_dim)  # Reshape back to original input shape
@@ -59,7 +80,7 @@ class Quantizer(nn.Module):
             self.codebook_used[:-cur_len].copy_(self.codebook_used[cur_len:].clone())
             self.codebook_used[-cur_len:].copy_(indices)
 
-        entropy_loss = self.entropy_loss_ratio * self.compute_entropy_loss(logits.view(-1, self.n_e))
+        entropy_loss = self.entropy_loss_ratio * self.compute_entropy_loss(logits.view(-1, self.n_e), current_tau)
 
         avg_probs = torch.mean(probs, dim=0).mean()  # Average probabilities
         max_probs = torch.max(probs, dim=0)[0].mean()  # Maximum probabilities
@@ -67,14 +88,17 @@ class Quantizer(nn.Module):
         info = {
             "avg_probs": avg_probs,
             "max_probs": max_probs,
-            "z_cos": zq_z_cos
+            "z_cos": zq_z_cos,
+            "tau": current_tau.item() if self.learnable else current_tau
         }
 
         return z_q, entropy_loss, info
 
-    def compute_entropy_loss(self, affinity, temperature=0.005):
+    def compute_entropy_loss(self, affinity, tau=None):
+        if tau is None:
+            tau = self.tau
         flat_affinity = affinity.reshape(-1, affinity.shape[-1])
-        flat_affinity /= temperature
+        flat_affinity = flat_affinity / tau
         probs = F.softmax(flat_affinity, dim=-1)
         log_probs = F.log_softmax(flat_affinity + 1e-5, dim=-1)
 
@@ -88,7 +112,7 @@ class Quantizer(nn.Module):
         return loss
     
     @torch.no_grad()
-    def sample_random(self, batch_size, device=None):
+    def sample(self, batch_size, device=None):
         """Sample random codes from the codebook"""
         if device is None:
             device = self.device
@@ -100,13 +124,4 @@ class Quantizer(nn.Module):
         embedding = F.normalize(self.embedding, p=2, dim=-1) if self.l2_norm else self.embedding
         z_sampled = embedding[indices]  # [batch_size, e_dim]
         
-        return z_sampled, indices
-    
-    @property
-    def device(self):
-        """Get the device of the model parameters"""
-        try:
-            return next(self.parameters()).device
-        except StopIteration:
-            # Fallback if no parameters
-            return torch.device('cpu')
+        return z_sampled

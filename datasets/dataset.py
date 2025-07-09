@@ -187,9 +187,9 @@ def get_datasets(cfg, args):
                 f' te_sample_size={cfg.n_sample_points}; '
                 )
     
-    synsetid = cate_to_synsetid[cfg.data.categories[0]]  # Single category supported for now
+    synsetid = cate_to_synsetid[cfg.categories]  # Single category supported for now
 
-    path2data = os.path.join(cfg.data.data_dir, synsetid, 'dataset.h5')
+    path2data = os.path.join(cfg.data_dir, synsetid, 'dataset.h5')
 
     kwargs = {}
     tr_dataset = PointClouds(
@@ -204,7 +204,7 @@ def get_datasets(cfg, args):
 
     eval_split = getattr(args, "eval_split", "test")
     te_dataset = PointClouds(
-        path2data=cfg.data_dir,
+        path2data=path2data,
         part=eval_split,
         cloud_size=cfg.n_sample_points,
         return_eval_cloud=False,  # No eval_cloud needed for evaluation
@@ -213,7 +213,7 @@ def get_datasets(cfg, args):
         cloud_transform=None,
     )
     val_dataset = PointClouds(
-        path2data=cfg.data_dir,
+        path2data=path2data,
         part='val',
         cloud_size=cfg.n_sample_points,
         return_eval_cloud=False,  # No eval_cloud needed for validation
@@ -233,13 +233,14 @@ def get_data_loaders(cfg, args):
             tr_dataset, shuffle=True)
     else:
         kwargs['shuffle'] = True
-    if args.eval_trainnll:
+    if args.eval:
         kwargs['shuffle'] = False
     train_loader = data.DataLoader(dataset=tr_dataset,
                                    batch_size=cfg.batch_size,
                                    num_workers=cfg.num_workers,
                                    drop_last=cfg.train_drop_last == 1,
-                                   pin_memory=False, **kwargs)
+                                   pin_memory=False, **kwargs
+                                   )
     test_loader = data.DataLoader(dataset=te_dataset,
                                   batch_size=cfg.batch_size_test,
                                   shuffle=False,
