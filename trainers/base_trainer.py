@@ -10,7 +10,8 @@ from datasets import dataset
 from utils.utils import AverageMeter
 from utils.vis_helper import visualize_point_clouds_3d
 from utils.data_helper import normalize_point_clouds
-from utils.eval_helper import compute_NLL_metric
+from utils.eval_helper import compute_NLL_metric, get_ref_num
+from utils.eval_metrics import compute_all_metrics, jsd_between_point_cloud_sets
 
 
 class BaseTrainer(ABC):
@@ -59,30 +60,15 @@ class BaseTrainer(ABC):
         if writer is not None:
             writer.upload_meter(step=epoch)
 
-    def save(self, epoch=None, step=None, save_dir=None, save_name=None):
-        data = {
-            'optimizer': self.optimizer.state_dict(),
-            'model': self.model.state_dict(),
-            'epoch': epoch,
-            'step': step,
-        }
-        save_dir = self.cfg.save_dir if save_dir is None else save_dir
-        save_name = "epoch_%s_iters_%s.pt" % (epoch, step) if save_name is None else save_name
-        path = os.path.join(save_dir, "checkpoints", save_name)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        logger.info(f"Saving checkpoint to {path}")
-        torch.save(data, path)
-
-        return path
-
     def build_data(self):
         logger.info('Building data loader...')
         loaders = dataset.get_data_loaders(self.cfg, self.args)
         train_loader = loaders['train_loader']
         test_loader = loaders['test_loader']
+        val_loader = loaders['val_loader']
 
-        return train_loader, test_loader
-    
+        return train_loader, test_loader, val_loader
+
     def train_epochs(self):
         cfg, args = self.cfg, self.args
         writer = self.writer
@@ -214,6 +200,7 @@ class BaseTrainer(ABC):
         
         writer.add_image('vis_out/recont-train', img_list, step)
 
+    @torch.no_grad()
     def vis_sample(self, writer=None, step=None):
         """ Visualize sampling results """
         n_sampled_points = self.num_points
@@ -252,7 +239,7 @@ class BaseTrainer(ABC):
 
         gen_pcs, ref_pcs, label_pcs = [], [], []
 
-        data_loader = self.test_loader  # Use test loader for evaluation
+        data_loader = self.val_loader  # Use validation loader for evaluation
 
         for vid, val_batch in enumerate(data_loader):
             if vid % 30 == 1:
@@ -261,8 +248,8 @@ class BaseTrainer(ABC):
             val_x = val_batch['cloud'].to(device)  # Use 'cloud' key from your dataset
             
             # Check if normalization data exists in batch
-            m = val_batch.get('mean', torch.zeros_like(val_x[:, 0:1, :]))
-            s = val_batch.get('std', torch.ones_like(val_x[:, 0:1, :]))
+            m = val_batch['orig_c']
+            s = val_batch['orig_s']
 
             B, N, C = val_x.shape
             m = m.view(B, 1, -1)
@@ -309,6 +296,185 @@ class BaseTrainer(ABC):
             self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
         return score
     
-    def eval_sample(self):
-        """ sample from the model """
-        pass # TO DO
+    @torch.no_grad()
+    def eval_sample(self, step=0):
+        """ compute sample metric: MMD, COV, 1-NNA """
+        writer = self.writer
+        batch_size_test = self.cfg.data.batch_size_test
+        device = self.device
+        test_loader = self.test_loader
+        sample_num_points = self.cfg.data.n_sample_points
+        cates = getattr(self.cfg.data, 'categories', ['general'])
+        
+        # Use get_ref_num to determine number of samples based on category
+        if len(cates) == 1 and cates[0] in ['airplane', 'chair', 'car', 'animal', 'mug', 'bottle', 'all']:
+            num_samples = get_ref_num(cates[0])
+            logger.info(f'Using standard dataset size for {cates[0]}: {num_samples} samples')
+        else:
+            # Fallback for custom datasets or multiple categories
+            num_samples = getattr(self.cfg, 'num_eval_samples', 50)
+            logger.info(f'Using configured number of samples: {num_samples}')
+        
+        logger.info(f'Starting sample evaluation with {num_samples} samples')
+        
+        # Create category-specific output directories
+        for category in cates:
+            category_dir = os.path.join(self.cfg.save_dir, 'eval_samples', category)
+            os.makedirs(category_dir, exist_ok=True)
+        
+        # Generate samples
+        gen_pcs = []
+        ref_pcs = []
+        labels_list = []
+
+        # Calculate number of batches needed
+        len_test_loader = num_samples // batch_size_test + 1
+        
+        if self.args.distributed:
+            num_gen_iter = max(1, len_test_loader // self.args.global_size)
+            if num_gen_iter * batch_size_test * self.args.global_size < num_samples:
+                num_gen_iter = num_gen_iter + 1
+        else:
+            num_gen_iter = len_test_loader
+        
+        logger.info(f'Rank={self.args.global_rank}, num_gen_iter: {num_gen_iter}; num_samples={num_samples}, batch_size_test={batch_size_test}')
+        
+        # Generate samples
+        seed = getattr(self.cfg, 'eval_seed', 42)
+        for i in range(num_gen_iter):
+            torch.manual_seed(seed + i)
+            np.random.seed(seed + i)
+            torch.cuda.manual_seed_all(seed + i)
+            
+            logger.info(f'Generating batch {i+1}/{num_gen_iter}')
+            
+            # Generate samples using your model's sample method
+            samples, labels = self.sample(sample_num_points, batch_size_test)
+            
+            gen_pcs.append(samples.detach().cpu())
+            labels_list.append(labels.detach().cpu())
+        
+        # Collect reference data from test loader
+        ref_mean_pcs, ref_std_pcs = [], []
+        for batch_idx, batch in enumerate(test_loader):
+            if batch_idx >= len_test_loader:
+                break
+            ref_data = batch['cloud'].cpu()
+            ref_pcs.append(ref_data)
+            
+            # Collect normalization parameters if available
+            m = batch['orig_c']
+            s = batch['orig_s']
+            ref_mean_pcs.append(m)
+            ref_std_pcs.append(s)
+        
+        # Concatenate all samples and normalization data
+        gen_pcs = torch.cat(gen_pcs, dim=0)[:num_samples]
+        ref_pcs = torch.cat(ref_pcs, dim=0)[:num_samples]
+        ref_mean_pcs = torch.cat(ref_mean_pcs, dim=0)[:num_samples]
+        ref_std_pcs = torch.cat(ref_std_pcs, dim=0)[:num_samples]
+        
+        # Handle distributed training
+        if self.args.distributed:
+            import torch.distributed as dist
+            gen_pcs = gen_pcs.to(device)
+            logger.info(f'Before gather: {gen_pcs.shape}, rank={self.args.global_rank}')
+            
+            gen_pcs_list = [torch.zeros_like(gen_pcs) for _ in range(self.args.global_size)]
+            dist.all_gather(gen_pcs_list, gen_pcs)
+            gen_pcs = torch.cat(gen_pcs_list, dim=0).cpu()
+            
+            logger.info(f'After gather: {gen_pcs.shape}, rank={self.args.global_rank}')
+        
+        # Only rank 0 does evaluation and saves results
+        if self.args.global_rank != 0:
+            return
+        
+        # Apply denormalization like compute_score does
+        if ref_mean_pcs is not None and ref_std_pcs is not None:
+            logger.info('Applying denormalization to point clouds')
+            # Denormalize to original scale/position
+            ref_pcs = ref_pcs * ref_std_pcs + ref_mean_pcs
+            gen_pcs = gen_pcs * ref_std_pcs + ref_mean_pcs
+        
+        # Option for post-processing normalization (like compute_score)
+        norm_box = getattr(self.cfg.data, 'normalize_for_eval', False)
+        if norm_box:
+            logger.info('Applying box normalization for fair comparison')
+            ref_pcs = 0.5 * torch.stack(normalize_point_clouds(ref_pcs), dim=0)
+            gen_pcs = 0.5 * torch.stack(normalize_point_clouds(gen_pcs), dim=0)
+        
+        logger.info(f'Final data shapes - ref_pcs: {ref_pcs.shape}, gen_pcs: {gen_pcs.shape}')
+        
+        # Save generated samples by category
+        for category in cates:
+            category_dir = os.path.join(self.cfg.save_dir, 'eval_samples', category)
+            output_name = os.path.join(category_dir, f'samples_step_{step}.pt')
+            torch.save(gen_pcs, output_name)
+            logger.info(f'Saved samples for category {category} at {output_name}')
+        
+        # Visualize samples
+        if writer is not None:
+            img_list = []
+            vis_samples = gen_pcs[:8]  # Visualize first 8 samples
+            norm_samples = normalize_point_clouds([s for s in vis_samples])
+            img = visualize_point_clouds_3d(norm_samples, [f'sample-{i}' for i in range(len(norm_samples))], labels=labels_list[:8])
+            img_list.append(torch.as_tensor(img) / 255.0)
+            
+            grid = torchvision.utils.make_grid(img_list)
+            writer.add_image('eval_samples/generated', grid, step)
+                
+        results = {}
+        for category in cates:
+            logger.info(f'Computing metrics for category: {category}')
+            
+            # Compute comprehensive metrics like compute_score does
+            category_results = compute_all_metrics(
+                gen_pcs[:, :, :3].to(device).float(), 
+                ref_pcs[:, :, :3].to(device).float(), 
+                batch_size=min(50, batch_size_test),
+                accelerated_cd=True
+            )
+            
+            # Add JSD metric like compute_score does
+            jsd = jsd_between_point_cloud_sets(
+                gen_pcs.cpu().numpy(), ref_pcs.cpu().numpy())
+            category_results['jsd'] = jsd
+            
+            results[category] = category_results
+            
+            # Save metrics to category folder
+            category_dir = os.path.join(self.cfg.save_dir, 'eval_samples', category)
+            metrics_file = os.path.join(category_dir, f'metrics_step_{step}.txt')
+            
+            with open(metrics_file, 'w') as f:
+                f.write(f'Evaluation Results for {category} at step {step}\n')
+                f.write('=' * 50 + '\n')
+                for metric_name, value in category_results.items():
+                    if isinstance(value, (int, float)):
+                        f.write(f'{metric_name}: {value:.6f}\n')
+                    else:
+                        f.write(f'{metric_name}: {value}\n')
+                    
+                    # Log to tensorboard
+                    if writer is not None and isinstance(value, (int, float)):
+                        writer.add_scalar(f'eval/{category}/{metric_name}', value, step)
+            
+            logger.info(f'Saved metrics for {category} at {metrics_file}')
+        
+        # Log summary
+        msg = f'Evaluation completed at step {step}\n'
+        for category, category_results in results.items():
+            msg += f'\n[{category}] Results:\n'
+            for metric, value in category_results.items():
+                if 'CD' in metric or 'EMD' in metric:
+                    msg += f'  {metric}: {value:.6f}\n'
+        
+        logger.info(msg)
+        
+        # Save summary to main directory
+        summary_file = os.path.join(self.cfg.save_dir, 'eval_summary.txt')
+        with open(summary_file, 'a') as f:
+            f.write(msg + '\n')
+        
+        return results

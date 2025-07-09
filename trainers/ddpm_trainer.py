@@ -1,5 +1,6 @@
-from models import DDPM, VAE
+from models import VAE
 from .base_trainer import BaseTrainer
+from latent_diffusion.ldm.models.diffusion.ddpm import LatentDiffusion
 
 import torch
 import torch.nn as nn
@@ -7,6 +8,7 @@ from torch.amp import GradScaler, autocast
 import torch.distributed as dist
 from loguru import logger
 from utils import utils
+import os
 
 class Trainer(BaseTrainer):
     def __init__(self, cfg, args):
@@ -35,6 +37,43 @@ class Trainer(BaseTrainer):
 
         logger.info('done init trainer @{}', self.device)
 
+    def save(self, save_name=None, epoch=None, step=None, save_dir=None):
+        grad_scalar = self.grad_scalar
+        content = {'epoch': epoch, 'global_step': step, 
+                   'grad_scalar': grad_scalar.state_dict(),
+                   'ddpm_state_dict': self.model.state_dict(), 'ddpm_optimizer': self.optimizer.state_dict(),
+                   'ddpm_scheduler': self.scheduler.state_dict(), 'vae_state_dict': self.vae.state_dict(),
+                   }
+        save_name = f"epoch_{epoch}_iters_{step}.pt" if save_name is None else save_name
+        if save_dir is None:
+            save_dir = self.cfg.save_dir
+        path = os.path.join(save_dir, "checkpoints", save_name)
+        if not os.path.exists(os.path.dirname(path)):
+            os.makedirs(os.path.dirname(path))
+        logger.info('Save model to: {}', path)
+        torch.save(content, path)
+        
+        return path
+
+    def resume(self, path, eval=False):
+        checkpoint = torch.load(path, map_location='cpu')
+        self.start_epoch = checkpoint['epoch']
+        self.model.load_state_dict(checkpoint['ddpm_state_dict'])
+        # load dae
+        self.model = self.model.to(self.device)
+        self.optimizer.load_state_dict(checkpoint['ddpm_optimizer'])
+        self.scheduler.load_state_dict(checkpoint['ddpm_scheduler'])
+        # load vae
+
+        self.vae.load_state_dict(checkpoint['vae_state_dict'])
+        self.vae = self.vae.to(self.device)
+
+        # need to comment if load regular vae from voxel2input_ada trainer
+        self.grad_scalar.load_state_dict(checkpoint['grad_scalar'])
+        self.step = checkpoint['global_step']
+
+        logger.info('Resumed from : {}, epoch={}', path, self.start_epoch)
+
     def build_model(self):
         cfg, args = self.cfg, self.args
 
@@ -44,22 +83,22 @@ class Trainer(BaseTrainer):
         self.vae = VAE(cfg, args).eval().to(self.device)  # Use eval mode for VAE during training
         self.vae.load_state_dict(torch.load(cfg.vae_checkpoint, map_location=self.device)["model_state_dict"], strict=True)
 
-        if cfg.model.ldm_backbone == "unet1":
+        if cfg.model.ddpm_backbone == "unet1":
             diff_model_config = {"target": "ldm.modules.diffusionmodules.openaimodel.UNetModel",
                                 "params": {"dims": 1, "in_channels": 1, "model_channels": 256, "up_down_sampling": True,
                                             "attention_resolutions": (2, 4, 8), "channel_mult": (1, 2, 2, 4), "num_res_blocks": 2}}
-        elif cfg.model.ldm_backbone == "unet1x":
+        elif cfg.model.ddpm_backbone == "unet1x":
             diff_model_config = {"target": "ldm.modules.diffusionmodules.openaimodel.UNetModel",
                                 "params": {"dims": 1, "in_channels": 1, "model_channels": 320, "up_down_sampling": True,
                                             "attention_resolutions": (2, 4, 8), "channel_mult": (1, 2, 4, 4), "num_res_blocks": 3}}
-        elif args.ldm_backbone == "unet1024":
+        elif args.ddpm_backbone == "unet1024":
             diff_model_config = {"target": "ldm.modules.diffusionmodules.openaimodel.UNetModel",
                                 "params": {"dims": 1, "in_channels": 1024, "model_channels": 1024,
                                             "up_down_sampling": False}}
         else:
             raise NotImplementedError
         
-        self.model = DDPM(diff_model_config=diff_model_config, conditioning_key=None).to(self.device)
+        self.model = LatentDiffusion(diff_model_config=diff_model_config, conditioning_key=None).to(self.device)
 
         if args.distributed:
             self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[args.local_rank], output_device=args.local_rank)
@@ -143,7 +182,7 @@ class Trainer(BaseTrainer):
             self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
         
         try:
-            samples, labels = self.vae.recont(x, deterministic=True)
+            samples, labels = self.vae.recont(x)
         finally:
             # Always restore original parameters
             if self.cfg.training.opt.ema:

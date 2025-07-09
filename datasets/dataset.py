@@ -72,14 +72,13 @@ synsetid_to_cate = {
 cate_to_synsetid = {v: k for k, v in synsetid_to_cate.items()}
 
 class PointClouds(Dataset):
-    def __init__(self, path2data, part='train', meshes_fname='meshes.h5',
+    def __init__(self, path2data, part='train',
                  cloud_size=2**10, return_eval_cloud=False,
                  return_original_scale=False, return_bbox_scale=False,
                  cloud_transform=None):
         super().__init__()
         self.path2data = path2data
         self.part = part
-        self.meshes_fname = meshes_fname
         self.cloud_size = cloud_size
         self.return_eval_cloud = return_eval_cloud
         self.return_original_scale = return_original_scale
@@ -91,7 +90,7 @@ class PointClouds(Dataset):
 
     def load_metadata(self):
         """Load metadata arrays (bounds, centers, scales) from HDF5 file."""
-        with h5.File(os.path.join(self.path2data, self.meshes_fname), 'r', libver='latest', swmr=True) as fin:
+        with h5.File(self.path2data, 'r', libver='latest', swmr=True) as fin:
             group = fin[self.part]
             
             self.vertices_c_bounds = np.array(group['vertices_c_bounds'][:], dtype=np.uint64)
@@ -148,7 +147,7 @@ class PointClouds(Dataset):
         np.random.seed((i * 31 + os.getpid()) % (2**32 - 1))
 
         if self.data_file is None:
-            self.data_file = h5.File(os.path.join(self.path2data, self.meshes_fname), 'r', libver='latest', swmr=True)
+            self.data_file = h5.File(self.path2data, 'r', libver='latest', swmr=True)
 
         group = self.data_file[self.part]
         
@@ -187,11 +186,15 @@ def get_datasets(cfg, args):
     logger.info(f'get_datasets: tr_sample_size={cfg.n_sample_points}, '
                 f' te_sample_size={cfg.n_sample_points}; '
                 )
+    
+    synsetid = cate_to_synsetid[cfg.data.categories[0]]  # Single category supported for now
+
+    path2data = os.path.join(cfg.data.data_dir, synsetid, 'dataset.h5')
+
     kwargs = {}
     tr_dataset = PointClouds(
-        path2data=cfg.data_dir,
+        path2data=path2data,
         part='train',
-        meshes_fname=getattr(cfg, 'meshes_fname', 'dataset.h5'),
         cloud_size=cfg.n_sample_points,
         return_eval_cloud=True,  # Need both cloud and eval_cloud for training
         return_original_scale=False,  # No scales needed for training
@@ -199,22 +202,31 @@ def get_datasets(cfg, args):
         cloud_transform=getattr(cfg, 'cloud_transform', None),
         **kwargs)
 
-    eval_split = getattr(args, "eval_split", "val")
+    eval_split = getattr(args, "eval_split", "test")
     te_dataset = PointClouds(
         path2data=cfg.data_dir,
         part=eval_split,
-        meshes_fname=getattr(cfg, 'meshes_fname', 'dataset.h5'),
         cloud_size=cfg.n_sample_points,
         return_eval_cloud=False,  # No eval_cloud needed for evaluation
         return_original_scale=True,  # Need scales for evaluation
         return_bbox_scale=True,  # Need scales for evaluation
         cloud_transform=None,
     )
-    return tr_dataset, te_dataset
+    val_dataset = PointClouds(
+        path2data=cfg.data_dir,
+        part='val',
+        cloud_size=cfg.n_sample_points,
+        return_eval_cloud=False,  # No eval_cloud needed for validation
+        return_original_scale=True,  # Need scales for validation
+        return_bbox_scale=True,  # Need scales for validation
+        cloud_transform=None,
+    )
+
+    return tr_dataset, te_dataset, val_dataset
 
 
 def get_data_loaders(cfg, args):
-    tr_dataset, te_dataset = get_datasets(cfg, args)
+    tr_dataset, te_dataset, val_dataset = get_datasets(cfg, args)
     kwargs = {}
     if args.distributed:
         kwargs['sampler'] = data.distributed.DistributedSampler(
@@ -235,10 +247,18 @@ def get_data_loaders(cfg, args):
                                   pin_memory=False,
                                   drop_last=False,
                                   )
+    val_loader = data.DataLoader(dataset=val_dataset,
+                                  batch_size=cfg.batch_size_test,
+                                  shuffle=False,
+                                  num_workers=cfg.num_workers,
+                                  pin_memory=False,
+                                  drop_last=False,
+                                )
     logger.info(
         f'[Batch Size] train={cfg.batch_size}, test={cfg.batch_size_test}; drop-last={cfg.train_drop_last}')
     loaders = {
         "test_loader": test_loader,
-        'train_loader': train_loader,
+        "train_loader": train_loader,
+        "val_loader": val_loader
     }
     return loaders

@@ -11,6 +11,7 @@ cfg.model.feat_dim = 64
 cfg.model.point_prior_n_layers = 1
 cfg.model.weight_n_layers = 1
 cfg.model.quantizer = 'kl' # or 'softvq'
+cfg.model.ddpm_backbone = 'unet1'  # Options: 'unet1', 'unet1x', 'unet1024'
 
 cfg.model.klquantizer = CN()
 cfg.model.klquantizer.kl_weight = 0.5
@@ -24,9 +25,10 @@ cfg.model.soft_vq.show_usage = True  # Track codebook usage
 cfg.model.soft_vq.l2_norm = False  # Normalize embeddings
 
 cfg.data = CN()
-cfg.data.dataset = 'shapenet'
+cfg.data.dataset = 'ShapeNetCore.v2'
+cfg.data.categories = ['chair']
 cfg.data.n_sample_points = 2048
-cfg.data.data_dir = 'path/to/your/data'  # Add this
+cfg.data.data_dir = './data'  # Add this
 cfg.data.batch_size = 32
 cfg.data.batch_size_test = 32
 cfg.data.num_workers = 4
@@ -49,7 +51,6 @@ cfg.training.opt.ema_decay = 0.9999
 cfg.training.opt.scheduler = 'cosine_anneal_nocycle'
 
 # Add missing configuration
-cfg.save_dir = 'outputs'
 cfg.exp_name = ''
 cfg.log_freq = 100
 cfg.viz_freq = 1000

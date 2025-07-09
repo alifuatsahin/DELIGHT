@@ -32,7 +32,7 @@ class VAE(nn.Module):
         return latent, kl_loss
     
     @torch.no_grad()
-    def recont(self, pc, deterministic=True):
+    def recont(self, pc):
         """
         Reconstruct point clouds (encode then decode).
         

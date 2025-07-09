@@ -3,6 +3,7 @@ import importlib
 import argparse
 import os
 import sys
+import time
 import torch.multiprocessing as mp
 from default_config import cfg as config
 
@@ -37,7 +38,7 @@ def main(args, config):
 
     if args.resume or args.eval:
         assert args.pretrained is not None, "Pretrained model path must be provided for resuming."
-        trainer.start_epoch = trainer.resume(args.pretrained, eval=args.eval)
+        trainer.resume(args.pretrained, eval=args.eval)
     elif args.pretrained is not None:
         logger.info('Resuming training from {}; if you do not want to resume training, edit the config to change the exp name',
                     args.pretrained)
@@ -61,7 +62,7 @@ def get_args():
 
     parser.add_argument('--num_gpus', type=int, default=1,
                         help='Number of GPUs to use for training')
-    parser.add_argument('--exp_root', type=str, default='exp')
+    parser.add_argument('--exp_root', type=str, default='../experiments')
     parser.add_argument('--dataset', type=str, required=True, 
                         help='Which dataset to use')
     parser.add_argument('--resume', default=False, action='store_true')
@@ -72,10 +73,10 @@ def get_args():
                         help='only eval nll, no sampling')
     parser.add_argument('--skip_nll', type=int, default=0,
                         help='skip eval nll ')
-    parser.add_argument("opt",
-                    help="Modify config options using the command-line",
-                    default=None,
-                    nargs=argparse.REMAINDER)
+    parser.add_argument('--opt',
+                        help="Modify config options using the command-line",
+                        default=None,
+                        nargs=argparse.REMAINDER)
     parser.add_argument('--num_proc_node', type=int, default=1,
                         help='The number of nodes in multi node env.')
     parser.add_argument('--node_rank', type=int, default=0,
@@ -99,15 +100,30 @@ def get_args():
     config.merge_from_list(args.opt)
 
     if config.exp_name == '' or config.exp_name is None:
-        config.exp_name = f"{config.dataset}_{config.training.type}"
+        timestamp = time.strftime('%Y%m%d_%H%M%S')
+        
+        # Build detailed experiment name
+        exp_components = [
+            config.dataset,
+            f"bs{config.data.batch_size}",
+            timestamp
+        ]
+
+        config.exp_name = "_".join(exp_components)
+
+    logger.info(f'Generated experiment name: {config.exp_name}')
 
     if args.eval:
-        config.save_dir = config.log_dir = config.log_name = os.path.dirname(args.config) + "eval"
-
+        # For evaluation, use the existing experiment directory but add eval suffix
+        base_dir = os.path.dirname(args.config) if hasattr(args, 'config') else os.path.join(args.exp_root, config.exp_name)
+        eval_suffix = f"_eval_{time.strftime('%Y%m%d_%H%M%S')}" if not hasattr(args, 'config') else "_eval"
+        config.save_dir = config.log_dir = config.log_name = base_dir + eval_suffix
     else:
-        config.log_name = os.path.join(args.exp_root, config.exp_name)
-        config.save_dir = os.path.join(args.exp_root, config.exp_name)
-        config.log_dir = os.path.join(args.exp_root, config.exp_name)
+        # For training, create organized directory structure
+        base_exp_dir = os.path.join(args.exp_root, config.training.type)
+        config.log_name = os.path.join(base_exp_dir, config.exp_name)
+        config.save_dir = os.path.join(base_exp_dir, config.exp_name)  
+        config.log_dir = os.path.join(base_exp_dir, config.exp_name)
     
     os.makedirs(config.log_dir, exist_ok=True)
 
@@ -116,10 +132,24 @@ def get_args():
         logger.add(config.log_dir + '/train.log')
         logger.info('Exp root: {} + exp name: {}, save dir: {}', args.exp_root,
                     config.exp_name, config.save_dir)
-        saved_cfg = os.path.join(config.log_dir, 'cfg.yml')
+        saved_cfg = os.path.join(config.log_dir, 'config.yml')
         with open(saved_cfg, 'w') as file:
             file.write(config.dump())
         logger.info('Save config at {}', saved_cfg)
+        
+        # Also save a human-readable experiment info file
+        exp_info_file = os.path.join(config.log_dir, 'experiment_info.txt')
+        with open(exp_info_file, 'w') as f:
+            f.write(f"Experiment Name: {config.exp_name}\n")
+            f.write(f"Dataset: {config.dataset}\n")
+            f.write(f"Training Type: {config.training.type}\n")
+            f.write(f"Batch Size: {config.data.batch_size}\n")
+            f.write(f"Learning Rate: {config.training.opt.lr}\n")
+            f.write(f"Start Time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Command Line Args: {' '.join(sys.argv)}\n")
+            f.write(f"Latent Dimension: {config.model.latent_dim}\n")
+        logger.info('Save experiment info at {}', exp_info_file)
+
     elif args.eval:
         logger.add(config.log_dir + '/eval_gen.log')
     logger.info('Log dir: {}', config.log_dir)

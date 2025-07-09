@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch.amp import autocast, GradScaler
 import torch.distributed as dist
 from loguru import logger
+import os
 
 from models.vae import VAE
 from .base_trainer import BaseTrainer
@@ -31,9 +32,49 @@ class Trainer(BaseTrainer):
             cfg
         )
         
-        self.train_loader, self.test_loader = self.build_data()
+        self.train_loader, self.test_loader, self.val_loader = self.build_data()
 
         logger.info('Done init trainer @{}', self.device)
+
+    def filter_name(self, ckpt):
+        ckpt_new = {}
+        for k, v in ckpt.items():
+            if k[:7] == 'module.':
+                kn = k[7:]
+            elif k[:13] == 'model.module.':
+                kn = k[13:]
+            else:
+                kn = k
+            ckpt_new[kn] = v
+        return ckpt_new
+
+    def resume(self, path, eval=False):
+        ckpt = torch.load(path)
+        ckpt = self.filter_name(ckpt)
+        self.model.load_state_dict(ckpt['model'])
+        if not eval:
+            self.optimizer.load_state_dict(ckpt['optimizer'])
+            self.start_epoch = ckpt['epoch'] + 1
+            self.step = ckpt['step']
+        
+        logger.info(f"Resumed from {path}")
+
+    def save(self, epoch=None, step=None, save_dir=None, save_name=None):
+        data = {
+            'optimizer': self.optimizer.state_dict(),
+            'model': self.model.state_dict(),
+            'grad_scalar': self.optimizer.grad_scalar.state_dict(),
+            'epoch': epoch,
+            'step': step,
+        }
+        save_dir = self.cfg.save_dir if save_dir is None else save_dir
+        save_name = "epoch_%s_iters_%s.pt" % (epoch, step) if save_name is None else save_name
+        path = os.path.join(save_dir, "checkpoints", save_name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        logger.info(f"Saving checkpoint to {path}")
+        torch.save(data, path)
+
+        return path
 
     def build_model(self):
         cfg, args = self.cfg, self.args
@@ -83,7 +124,7 @@ class Trainer(BaseTrainer):
             self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
         
         try:
-            samples, labels = self.model.sample(n_sampled_points, n_samples, deterministic=True)
+            samples, labels = self.model.sample(n_sampled_points, n_samples)
             output = samples.permute(0, 2, 1).contiguous()  # B3N->BN3
         finally:
             # Always restore original parameters
@@ -103,7 +144,7 @@ class Trainer(BaseTrainer):
         """
         # For reconstruction evaluation, typically use current weights to measure training progress
         
-        samples, labels = self.model.recont(x, deterministic=True)
+        samples, labels = self.model.recont(x)
         samples = samples.permute(0, 2, 1).contiguous() # B3N -> BN3
 
         return samples, labels

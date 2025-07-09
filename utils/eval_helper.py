@@ -53,3 +53,26 @@ def compute_NLL_metric(gen_pcs, ref_pcs, labels, device, writer=None, batch_size
         logger.info('{}: {}', k, v)
 
     return results
+
+def get_ref_num(cats, luo_split=False):
+    num_test = {
+        'animal': 100,
+        'airplane': 405,
+        'airplane_ps': 405,
+        'chair': 662,
+        'chair_ps': 662,
+        'car': 352,
+        'car_ps': 352,
+        'all': 1000,
+        'mug': 22,
+        'bottle': 43
+    }
+    if luo_split:
+        num_test = {
+            'airplane': 607,
+            'chair': 989,
+            'car': 528
+        }
+
+    assert(cats in num_test), f'not found: {cats} in {num_test}'
+    return num_test[cats]
