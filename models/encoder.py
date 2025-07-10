@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn 
 from typing import Tuple, List, Optional
-from modules.pvcnn2 import create_pointnet2_sa_components 
+from modules.pvcnn2 import create_pointnet2_sa_components
 
 
 class Encoder(nn.Module):
@@ -123,83 +123,3 @@ class Encoder(nn.Module):
         global_features = features.max(dim=-1)[0]
         
         return global_features
-    
-    def get_architecture_info(self) -> dict:
-        """
-        Get detailed architecture information.
-        
-        Returns:
-            Dictionary with architecture details
-        """
-        total_params = sum(p.numel() for p in self.parameters())
-        trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        
-        return {
-            'input_dim': self.input_dim,
-            'output_features': self.out_features,
-            'num_sa_blocks': len(self.sa_blocks),
-            'voxel_dimensions': self.voxel_dimensions,
-            'total_parameters': total_params,
-            'trainable_parameters': trainable_params,
-            'use_attention': self.use_attention,
-            'use_se': self.use_se,
-            'extra_feature_channels': self.extra_feature_channels
-        }
-    
-    def get_feature_maps(self, x: torch.Tensor) -> List[torch.Tensor]:
-        """
-        Get intermediate feature maps for analysis.
-        
-        Args:
-            x: Input point cloud (B, N, 3)
-            
-        Returns:
-            List of feature maps from each SA layer
-        """
-        x = x.transpose(1, 2)
-        xyz = x[:, :3, :]
-        features = x
-        
-        feature_maps = [features]
-        
-        for layer in self.layers:
-            features, xyz, _ = layer((features, xyz, None))
-            feature_maps.append(features)
-        
-        return feature_maps
-    
-    @torch.no_grad()
-    def analyze_receptive_field(self, x: torch.Tensor) -> dict:
-        """
-        Analyze the receptive field of the encoder.
-        
-        Args:
-            x: Input point cloud (B, N, 3)
-            
-        Returns:
-            Receptive field statistics
-        """
-        feature_maps = self.get_feature_maps(x)
-        
-        stats = {
-            'input_points': x.shape[1],
-            'layer_point_counts': [fm.shape[-1] for fm in feature_maps],
-            'layer_feature_dims': [fm.shape[1] for fm in feature_maps],
-            'compression_ratios': []
-        }
-        
-        for i in range(1, len(feature_maps)):
-            ratio = feature_maps[i-1].shape[-1] / feature_maps[i].shape[-1]
-            stats['compression_ratios'].append(ratio)
-        
-        return stats
-    
-    def __repr__(self) -> str:
-        """String representation of the encoder."""
-        info = self.get_architecture_info()
-        return (f"Encoder(input_dim={info['input_dim']}, "
-                f"output_features={info['output_features']}, "
-                f"sa_blocks={info['num_sa_blocks']}, "
-                f"params={info['total_parameters']:,})")
-
-

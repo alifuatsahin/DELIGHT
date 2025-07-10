@@ -2,6 +2,7 @@ from .eval_metrics import EMD_CD_F1
 from .vis_helper import visualize_point_clouds_3d
 from .data_helper import normalize_point_clouds
 
+from math import log, pi
 from loguru import logger
 import torch
 import torchvision
@@ -12,7 +13,7 @@ def pair_vis(gen_x, tr_x, labels, titles, subtitles, writer, step=-1):
     for i in range(num_recon):
         points = gen_x[i]
         points = normalize_point_clouds([tr_x[i], points])
-        point_labels = [None, labels[i]]
+        point_labels = [None, labels[i]] if labels is not None else [None, None]
         img = visualize_point_clouds_3d(points, subtitles[i], labels=point_labels)
         img_list.append(torch.as_tensor(img) / 255.0)
     grid = torchvision.utils.make_grid(img_list, nrow=num_recon//2)
@@ -76,3 +77,8 @@ def get_ref_num(cats, luo_split=False):
 
     assert(cats in num_test), f'not found: {cats} in {num_test}'
     return num_test[cats]
+
+def standard_normal_logprob(z):
+    dim = z.size(-1)
+    log_z = -0.5 * dim * log(2 * pi)
+    return log_z - z.pow(2) / 2

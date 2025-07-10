@@ -51,6 +51,7 @@ class SharedDot(nn.Module):
         output.squeeze_(1)
         return output
 
+
 class MLP(nn.Module):
     def __init__(
         self,
