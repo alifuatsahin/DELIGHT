@@ -233,11 +233,8 @@ class Decoder(nn.Module):
         """
         if warmup:
             batch_size = latent_vector.shape[0]
-            with torch.no_grad():
-                weights = self.mixture_weights_enc(latent_vector)
-            # Combine uniform + frozen learned weights
-            uniform = torch.full((batch_size, self.n_flows), 1.0 / self.n_flows, device=latent_vector.device)
-            return 0.999 * uniform + 0.001 * weights
+            weights = torch.full((batch_size, self.n_flows), 1.0 / self.n_flows, device=latent_vector.device)
+            return weights
         else:
             # Use learned weights based on latent vector
             return self.mixture_weights_enc(latent_vector)

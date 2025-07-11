@@ -84,7 +84,7 @@ class Trainer(BaseTrainer):
         self.model = VAE(cfg).to(self.device)
 
         if args.distributed:
-            self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[args.local_rank], output_device=args.local_rank)
+            self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
 
 
     def train_iter(self, batch, step):
