@@ -80,6 +80,12 @@ class Quantizer(nn.Module):
             self.codebook_used[:-cur_len].copy_(self.codebook_used[cur_len:].clone())
             self.codebook_used[-cur_len:].copy_(indices)
 
+        # Calculate codebook usage
+        codebook_usage = torch.tensor([
+            len(torch.unique(self.codebook_used[k])) / self.n_e 
+            for k in range(self.num_codebooks)
+        ]).mean() if self.show_usage else 0
+
         entropy_loss = self.entropy_loss_ratio * self.compute_entropy_loss(logits.view(-1, self.n_e), current_tau)
 
         avg_probs = torch.mean(probs, dim=0).mean()  # Average probabilities
@@ -89,7 +95,8 @@ class Quantizer(nn.Module):
             "avg_probs": avg_probs,
             "max_probs": max_probs,
             "z_cos": zq_z_cos,
-            "tau": current_tau.item() if self.learnable else current_tau
+            "tau": current_tau.item() if self.learnable else current_tau,
+            "codebook_usage": codebook_usage
         }
 
         return z_q, entropy_loss, info

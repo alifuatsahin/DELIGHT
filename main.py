@@ -12,12 +12,9 @@ if __name__ == "__main__":
 
     path = 'vae_model.pth'  # Path to save the model state
 
-    model = Encoder(cfg.model.input_dim).to(device)
+    model = VAE(cfg).to(device)
     model.eval()
-    input = torch.rand((1, 2048, 3), device=device, dtype=torch.float32)  # Example input tensor
-    torch.onnx.export(model, (input,), "encoder_model.onnx", verbose=False,
-                    input_names=["input_names"], output_names=["output_names"],
-                    export_params=True,)
+    # input = torch.rand((5, 2048, 3), device=device, dtype=torch.float32)  # Example input tensor
 
     # diff_model_config = {"target": "ldm.modules.diffusionmodules.openaimodel.UNetModel",
     #                 "params": {"dims": 1, "in_channels": 1, "model_channels": 320, "up_down_sampling": True,
@@ -27,14 +24,17 @@ if __name__ == "__main__":
 
     # torch.save(model, 'diffusion_model.pth')
 
-    # B = 10
-    # input_dim = cfg.model.input_dim
-    # N = 2048  # Number of points, can be adjusted as needed
+    B = 10
+    input_dim = cfg.model.input_dim
+    N = 2048  # Number of points, can be adjusted as needed
 
-    # p = torch.randn(B, N, input_dim, device=device)  # On CUDA if available
-    # g = torch.randn(B, N, input_dim, device=device)  # Change to (B, input_dim, N)
-    # labels = torch.randint(0, 4, (B, N), device=device)  # Random labels for testing
-    # output = model(p, g)
+    p = torch.randn(B, N, input_dim, device=device).permute(0, 2, 1)  # On CUDA if available
+    g = torch.randn(B, N, input_dim, device=device).permute(0, 2, 1)  # Change to (B, input_dim, N)
+    labels = torch.randint(0, 4, (B, N), device=device)  # Random labels for testing
+    output = model(p, g)
+
+    print(f"Shape of the input point cloud: {p.shape}")
+    print(f"Shape of the generated output: {output.shape}")
 
     # _, samples, labels, mixture_weights_logits = model.sample(n_sampled_points=N*2, n_samples=B)
     # print(f"Shape of the input point cloud: {p.shape}")

@@ -109,6 +109,10 @@ class Trainer(BaseTrainer):
         self.grad_scalar.step(self.optimizer)
         self.grad_scalar.update()
 
+        if self.writer is not None and "codebook_usage" in logs_dict:
+            codebook_usage = logs_dict.pop('codebook_usage')
+            self.writer.add_histogram('codebook_usage', codebook_usage.detach().cpu().item(), step)
+
         # Log metrics efficiently
         if self.writer is not None and step is not None:
             for k, v in logs_dict.items():
@@ -129,12 +133,12 @@ class Trainer(BaseTrainer):
                 samples = self.model.module.sample(n_sampled_points, n_samples)
             else:
                 samples = self.model.sample(n_sampled_points, n_samples)
-            output = samples.permute(0, 2, 1).contiguous()  # B3N->BN3
+            # output = samples.permute(0, 2, 1).contiguous()  # B3N->BN3
         finally:
             if self.cfg.training.opt.ema:
                 self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
 
-        return output
+        return samples
 
     @torch.no_grad()
     def eval(self, x):
@@ -154,7 +158,7 @@ class Trainer(BaseTrainer):
             else:
                 # For single GPU models
                 samples = self.model.recont(x)
-            samples = samples.permute(0, 2, 1).contiguous() # B3N -> BN3
+            # samples = samples.permute(0, 2, 1).contiguous() # B3N -> BN3
         finally:
             if was_training:
                 self.model.train()

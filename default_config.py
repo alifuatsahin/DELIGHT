@@ -41,7 +41,7 @@ cfg.model.soft_vq.learnable = True  # Whether to learn the temperature
 cfg.model.soft_vq.tau_min = 0.01  # Minimum temperature
 cfg.model.soft_vq.tau_max = 1.0  # Maximum temperature
 cfg.model.soft_vq.tau = 0.07  # (Initial) Temperature for softmax
-cfg.model.soft_vq.entropy_loss_ratio = 1 # Ratio for entropy loss (0.01)
+cfg.model.soft_vq.entropy_loss_ratio = 100 # Ratio for entropy loss (0.01)
 cfg.model.soft_vq.show_usage = True  # Track codebook usage
 cfg.model.soft_vq.l2_norm = False  # Normalize embeddings
 
