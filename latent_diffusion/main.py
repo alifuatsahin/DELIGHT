@@ -367,7 +367,7 @@ class ImageLogger(Callback):
             logger_log_images(pl_module, images, pl_module.global_step, split)
 
             if is_train:
-                pl_module.train()
+                pl_module.train_nbrdf()
 
     def check_frequency(self, check_idx):
         if ((check_idx % self.batch_freq) == 0 or (check_idx in self.log_steps)) and (

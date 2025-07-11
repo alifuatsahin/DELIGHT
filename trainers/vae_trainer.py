@@ -32,7 +32,7 @@ class Trainer(BaseTrainer):
             cfg
         )
         
-        self.train_loader, self.test_loader, self.val_loader = self.build_data()
+        self.train_loader, self.test_loader = self.build_data()
 
         logger.info('Done init trainer @{}', self.device)
 
@@ -63,7 +63,7 @@ class Trainer(BaseTrainer):
         data = {
             'optimizer': self.optimizer.state_dict(),
             'model': self.model.state_dict(),
-            'grad_scalar': self.optimizer.grad_scalar.state_dict(),
+            'grad_scalar': self.grad_scalar.state_dict(),
             'epoch': epoch,
             'step': step,
         }
@@ -96,8 +96,8 @@ class Trainer(BaseTrainer):
         self.model.train()
         self.optimizer.zero_grad()
 
-        tr_pts = batch['cloud'].to(self.device)  # (B, Npoints, 3)
-        eval_pts = batch.get('eval_cloud', tr_pts).to(self.device)  # (B, Npoints, 3) - fallback to tr_pts if missing
+        tr_pts = batch['tr_points'].to(self.device)  # (B, Npoints, 3)
+        eval_pts = batch['te_points'].to(self.device)  # (B, Npoints, 3) - fallback to tr_pts if missing
 
         with autocast(self.device_str, enabled=True):
             logs_dict = self.model(eval_pts, tr_pts, step=step)
@@ -108,8 +108,6 @@ class Trainer(BaseTrainer):
         self.grad_scalar.scale(loss).backward()
         self.grad_scalar.step(self.optimizer)
         self.grad_scalar.update()
-
-        logger.info(f"Reconstruction loss: {logs_dict['recont_loss']:.4f}")
 
         # Log metrics efficiently
         if self.writer is not None and step is not None:

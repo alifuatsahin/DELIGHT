@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.nn import Parameter
-from utils import reduce_tensor
+from utils.utils import reduce_tensor
 
 __all__ = ['MovingBatchNorm1d']
 

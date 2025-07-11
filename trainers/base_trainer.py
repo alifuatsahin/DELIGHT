@@ -23,7 +23,7 @@ class BaseTrainer(ABC):
         self.scheduler = None
         self.optimizer = None
         self.model = None
-        self.train_loader, self.test_loader, self.val_loader = None, None, None
+        self.train_loader, self.test_loader = None, None
         self.local_rank = args.local_rank
         self.writer = None
         self.num_points = cfg.data.n_sample_points
@@ -67,9 +67,8 @@ class BaseTrainer(ABC):
         loaders = get_data_loaders(self.cfg.data, self.args)
         train_loader = loaders['train_loader']
         test_loader = loaders['test_loader']
-        val_loader = loaders['val_loader']
 
-        return train_loader, test_loader, val_loader
+        return train_loader, test_loader
 
     def train_epochs(self):
         cfg, args = self.cfg, self.args
@@ -176,7 +175,7 @@ class BaseTrainer(ABC):
     def vis_recont(self, batch, writer=None, step=None):
         """ Visualize reconstruction results """
         
-        input = batch['cloud'].to(self.device)
+        input = batch['tr_points'].to(self.device)
         output = self.eval(input)
 
         assert len(input.shape) == len(output.shape) == 3 # (B, Npoints, 3)
@@ -219,7 +218,6 @@ class BaseTrainer(ABC):
             x_list.append(sample)
             name_list.append(f"Sample {idx + 1}")
 
-
             x_list = normalize_point_clouds(x_list)
 
             img = visualize_point_clouds_3d(x_list, name_list)
@@ -242,17 +240,17 @@ class BaseTrainer(ABC):
 
         gen_pcs, ref_pcs = [], []
 
-        data_loader = self.val_loader  # Use validation loader for evaluation
+        data_loader = self.test_loader  # Use test loader for evaluation
 
         for vid, val_batch in enumerate(data_loader):
             if vid % 30 == 1:
                 logger.info('eval: {}/{}', vid, len(data_loader))
 
-            val_x = val_batch['cloud'].to(device)  # Use 'cloud' key from your dataset
+            val_x = val_batch['tr_points'].to(device)  # Use 'cloud' key from your dataset
             
             # Check if normalization data exists in batch
-            m = val_batch['orig_c']
-            s = val_batch['orig_s']
+            m = val_batch['mean']
+            s = val_batch['std']
 
             B, N, C = val_x.shape
             m = m.view(B, 1, -1)
@@ -282,7 +280,7 @@ class BaseTrainer(ABC):
             self.writer.add_image('nll/rec', torch.as_tensor(img), step)
 
         results = compute_NLL_metric(
-            gen_pcs[:, :, :3], ref_pcs[:, :, :3], label_pcs, device, self.writer, batch_size=20, step=step)
+            gen_pcs[:, :, :3], ref_pcs[:, :, :3], device, self.writer, batch_size=20, step=step)
         score = 0
         
         for n, v in results.items():
@@ -357,12 +355,12 @@ class BaseTrainer(ABC):
         for batch_idx, batch in enumerate(test_loader):
             if batch_idx >= len_test_loader:
                 break
-            ref_data = batch['cloud'].cpu()
+            ref_data = batch['tr_points'].cpu()
             ref_pcs.append(ref_data)
             
             # Collect normalization parameters if available
-            m = batch['orig_c']
-            s = batch['orig_s']
+            m = batch['mean']
+            s = batch['std']
             ref_mean_pcs.append(m)
             ref_std_pcs.append(s)
         

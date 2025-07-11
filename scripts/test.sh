@@ -4,6 +4,9 @@
 #SBATCH -o delight.out-%j
 #SBATCH -c 10
 #SBATCH --gres=gpu:volta:2
+#SBATCH -p debug-gpu
+
+export PYTHONPATH="~/Pasta/DELIGHT:~/DELIGHT/latent_diffusion:$PYTHONPATH"
 
 source /etc/profile
 module load anaconda/Python-ML-2025a

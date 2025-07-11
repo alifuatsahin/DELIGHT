@@ -173,7 +173,7 @@ class FrozenClipImageEmbedder(nn.Module):
         """
     def __init__(
             self,
-            model,
+            model="ViT-B/32",
             jit=False,
             device='cuda' if torch.cuda.is_available() else 'cpu',
             antialias=False,

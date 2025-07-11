@@ -8,13 +8,12 @@
 # thanks!
 
 
-import os
 import math
+
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
 from einops import repeat
-
 from ldm.util import instantiate_from_config
 
 
@@ -202,7 +201,7 @@ def normalization(channels):
     :param channels: number of input channels.
     :return: an nn.Module for normalization.
     """
-    return GroupNorm32(32, channels)
+    return GroupNorm32(32, channels) # if channels % 32 == 0 else GroupNorm32(1, channels)
 
 
 # PyTorch 1.7 has SiLU, but we support PyTorch 1.5.
@@ -214,6 +213,7 @@ class SiLU(nn.Module):
 class GroupNorm32(nn.GroupNorm):
     def forward(self, x):
         return super().forward(x.float()).type(x.dtype)
+
 
 def conv_nd(dims, *args, **kwargs):
     """

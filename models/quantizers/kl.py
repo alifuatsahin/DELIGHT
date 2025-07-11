@@ -18,11 +18,18 @@ class Quantizer(nn.Module):
             self.mlp.weight.data[self.latent_dim:].normal_(std=0.033)
             self.mlp.bias.data[self.latent_dim:].fill_(0.0)
 
-    def reparameterize(self, mean, logvar):
+    @staticmethod
+    def reparameterize(mean, logvar):
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
 
         return mean + eps * std
+    
+    @staticmethod
+    def sample_gaussian(size, device):
+        y = torch.randn(*size).float().to(device)
+
+        return y
     
     def forward(self, features):
         """
@@ -55,9 +62,9 @@ class Quantizer(nn.Module):
         return kl_loss
     
     @torch.no_grad()
-    def sample(self, batch_size, device=None):
+    def sample(self, batch_size, device):
         """
-        Sample random codes from the codebook.
+        Sample random codes from gaussian distribution.
         Args:
             batch_size: Number of samples to generate.
             device: Device to place the samples on.
@@ -65,6 +72,6 @@ class Quantizer(nn.Module):
             z_random: Randomly sampled codes.
             indices: Indices of the sampled codes.
         """
-        sample = torch.randn(batch_size, self.latent_dim, device=device)
+        sample = self.sample_gaussian((batch_size, self.latent_dim), device=device)
 
         return sample

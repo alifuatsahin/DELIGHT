@@ -81,7 +81,7 @@ class Trainer(BaseTrainer):
             dist.barrier()
 
         self.vae = VAE(cfg).eval().to(self.device)  # Use eval mode for VAE during training
-        self.vae.load_state_dict(torch.load(cfg.vae_checkpoint, map_location=self.device)["model_state_dict"], strict=True)
+        self.vae.load_state_dict(torch.load(cfg.vae_checkpoint, map_location=self.device)["model"], strict=True)
 
         if cfg.model.ddpm_backbone == "unet1":
             diff_model_config = {"target": "ldm.modules.diffusionmodules.openaimodel.UNetModel",

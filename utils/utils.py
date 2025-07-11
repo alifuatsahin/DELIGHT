@@ -209,3 +209,12 @@ def init_processes(global_rank, size, args):
         logger.info('Single GPU training, no distributed initialization needed')
         
     logger.info('Process initialization completed for rank {}', global_rank)
+
+def reduce_tensor(tensor, world_size=None):
+    rt = tensor.clone()
+    dist.all_reduce(rt, op=dist.ReduceOp.SUM)
+    if world_size is None:
+        world_size = dist.get_world_size()
+
+    rt /= world_size
+    return rt

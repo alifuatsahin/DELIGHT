@@ -88,7 +88,7 @@ class NoisyLatentImageClassifier(pl.LightningModule):
     def load_diffusion(self):
         model = instantiate_from_config(self.diffusion_config)
         self.diffusion_model = model.eval()
-        self.diffusion_model.train = disabled_train
+        self.diffusion_model.train_nbrdf = disabled_train
         for param in self.diffusion_model.parameters():
             param.requires_grad = False
 

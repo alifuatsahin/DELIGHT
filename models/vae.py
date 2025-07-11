@@ -11,7 +11,6 @@ class VAE(nn.Module):
         super().__init__()
 
         self.latent_dim = cfg.model.latent_dim
-        self.warmup_epochs = cfg.training.warmup
         self.training_epochs = cfg.training.epochs
 
         self.encoder = Encoder(cfg.model.input_dim)
@@ -27,6 +26,8 @@ class VAE(nn.Module):
         self.kl_weight = cfg.model.kl_weight
 
         self.quantizer = get_quantizer(cfg, self.encoder.out_features)
+
+        logger.info(f"VAE initialized MODEL INFO: {self.get_model_info()}")
 
     @property
     def device(self):
@@ -53,14 +54,14 @@ class VAE(nn.Module):
         Reconstruct point clouds (encode then decode).
         
         Args:
-            pc: input point clouds (B, 3, N)
+            pc: input point clouds (B, N, 3)
             deterministic: whether to use deterministic reconstruction
             
         Returns:
             Tuple of (reconstructed_samples, flow_labels, mixture_weights)
         """
-        assert len(pc.shape) == 3, f"Expected (B, 3, N), got {pc.shape}"
-        n_sampled_points = pc.shape[2]
+        assert len(pc.shape) == 3, f"Expected (B, N, 3), got {pc.shape}"
+        n_sampled_points = pc.shape[1]
 
         # For reconstruction, we want to use posterior mean (deterministic)
         g_sample, _, _ = self.encode(pc)
@@ -130,7 +131,7 @@ class VAE(nn.Module):
 
     def forward(self, p, g, n_sampled_points=None, step=None):
         # p = p.transpose(1, 2)
-        num_points = p.shape[2] if n_sampled_points is None else n_sampled_points
+        num_points = p.shape[1] if n_sampled_points is None else n_sampled_points
 
         latent, kl_loss, info = self.encode(g)
 
@@ -141,12 +142,7 @@ class VAE(nn.Module):
 
         kl_loss = kl_coeff * kl_loss
 
-        if step is not None:
-            warmup = step < (self.warmup_epochs * self.total_iter / self.training_epochs)
-        else:
-            warmup = False
-
-        recont_loss = self.decoder(p, latent, num_points, warmup)
+        recont_loss = self.decoder(p, latent, num_points)
 
         output = {
             "loss": recont_loss + kl_loss,

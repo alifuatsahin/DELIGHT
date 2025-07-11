@@ -1,5 +1,63 @@
 import torch
 import torch.nn as nn
+from . import diffeq_layers
+import copy
+
+from .layers import Swish, Lambda
+
+
+NONLINEARITIES = {
+    "tanh": nn.Tanh(),
+    "relu": nn.ReLU(),
+    "softplus": nn.Softplus(),
+    "elu": nn.ELU(),
+    "swish": Swish(),
+    "square": Lambda(lambda x: x ** 2),
+    "identity": Lambda(lambda x: x),
+}
+
+class ODEnet(nn.Module):
+    """
+    Helper class to make neural nets for use in continuous normalizing flows
+    """
+
+    def __init__(self, hidden_dims, input_shape, context_dim, layer_type="concat", nonlinearity="softplus"):
+        super(ODEnet, self).__init__()
+        base_layer = {
+            "ignore": diffeq_layers.IgnoreLinear,
+            "squash": diffeq_layers.SquashLinear,
+            "scale": diffeq_layers.ScaleLinear,
+            "concat": diffeq_layers.ConcatLinear,
+            "concat_v2": diffeq_layers.ConcatLinear_v2,
+            "concatsquash": diffeq_layers.ConcatSquashLinear,
+            "concatscale": diffeq_layers.ConcatScaleLinear,
+        }[layer_type]
+
+        # build models and add them
+        layers = []
+        activation_fns = []
+        hidden_shape = input_shape
+
+        for dim_out in (hidden_dims + (input_shape[0],)):
+            layer_kwargs = {}
+            layer = base_layer(hidden_shape[0], dim_out, context_dim, **layer_kwargs)
+            layers.append(layer)
+            activation_fns.append(NONLINEARITIES[nonlinearity])
+
+            hidden_shape = list(copy.copy(hidden_shape))
+            hidden_shape[0] = dim_out
+
+        self.layers = nn.ModuleList(layers)
+        self.activation_fns = nn.ModuleList(activation_fns[:-1])
+
+    def forward(self, context, y):
+        dx = y
+        for l, layer in enumerate(self.layers):
+            dx = layer(context, dx)
+            # if not last layer, use nonlinearity
+            if l < len(self.layers) - 1:
+                dx = self.activation_fns[l](dx)
+        return dx
 
 class ODEfunc(nn.Module):
     def __init__(self, diffeq):

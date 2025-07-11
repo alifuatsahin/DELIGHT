@@ -61,8 +61,8 @@ class CNF(nn.Module):
         if self.conditional:
             assert context is not None
             states = (x, _logpx, context)
-            atol = [self.atol] * 3
-            rtol = [self.rtol] * 3
+            atol = self.atol #[self.atol] * 3
+            rtol = self.rtol #[self.rtol] * 3
         else:
             states = (x, _logpx)
             atol = [self.atol] * 2

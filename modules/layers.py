@@ -9,6 +9,13 @@ class Swish(nn.Module):
     def forward(self, x):
         return x * torch.sigmoid(x)
 
+class Lambda(nn.Module):
+    def __init__(self, f):
+        super(Lambda, self).__init__()
+        self.f = f
+
+    def forward(self, x):
+        return self.f(x)
 
 class SharedDot(nn.Module):
     def __init__(
