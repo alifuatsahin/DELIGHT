@@ -5,9 +5,11 @@ import math
 import numpy as np
 from typing import List, Tuple, Optional, Dict, Any
 from collections import OrderedDict
+from loguru import logger
 
 from modules.flows import CondRealNVPFlow3DTriple
 from modules.layers import MLP
+from modules.fre_loss import fre_loss
     
 class WeightsMLP(nn.Module):
     def __init__(
@@ -46,7 +48,7 @@ class WeightsMLP(nn.Module):
         else:
             features = input
         raw_alphas = self.alphas(features)
-        alphas = F.softplus(raw_alphas)  + 1e-6
+        alphas = F.softplus(raw_alphas) + 1
         dirichlet = torch.distributions.Dirichlet(alphas)
         weights = dirichlet.rsample()
 
@@ -109,6 +111,8 @@ class Decoder(nn.Module):
         self.feat_dim = cfg.feat_dim
         self.latent_dim = cfg.latent_dim
         self.input_dim = cfg.input_dim
+        self.high_freq_recon_coeff = cfg.high_freq_recon_coeff
+        self.high_freq_recon_lmax = cfg.high_freq_recon_lmax
         
         # Validate configuration
         self._validate_config()
@@ -368,6 +372,10 @@ class Decoder(nn.Module):
         batch_size = g.shape[0]
         mixture_weights = self.get_weights(g, warmup=warmup)
 
+        if self.high_freq_recon_coeff > 0:
+            flow_assignments = torch.multinomial(mixture_weights, n_sampled_points, replacement=True)
+            out_shape = torch.zeros(batch_size, self.input_dim, n_sampled_points, device=p.device)
+
         # Each flow processes the same number of points during training
         n_sample_flow = [n_sampled_points] * self.n_flows
             
@@ -399,12 +407,21 @@ class Decoder(nn.Module):
             flow_out['p_prior_samples'] = buf[0] + [p]
             flow_out['p_prior_mus'].extend(buf[1])
             flow_out['p_prior_logvars'].extend(buf[2])
+
+            if self.high_freq_recon_coeff > 0:
+                for b in range(batch_size):
+                    mask = (flow_assignments[b] == i)
+                    out_shape[b, :, mask] = flow_out['p_prior_samples'][0][b, :, mask]
                 
             output.append(flow_out)
 
-        recont_loss = self.get_pnll(output, mixture_weights)
+        recon_loss = self.get_pnll(output, mixture_weights)
 
-        return recont_loss
+        if self.high_freq_recon_coeff > 0:
+            fre_loss_item = fre_loss(p, out_shape, lmax=self.high_freq_recon_lmax) * 10 ** 7
+            recon_loss = (1 - self.high_freq_recon_coeff) * recon_loss + self.high_freq_recon_coeff * fre_loss_item
+
+        return recon_loss
 
     def get_pnll(self, output, mixture_weights):
         log_weights = torch.log(mixture_weights + 1e-8)

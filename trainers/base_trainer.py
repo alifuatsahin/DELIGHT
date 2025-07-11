@@ -5,6 +5,7 @@ import torchvision
 from abc import ABC, abstractmethod
 import numpy as np
 from loguru import logger
+import torch.distributed as dist
 
 from datasets.dataset import get_data_loaders
 from utils.utils import AverageMeter
@@ -22,7 +23,7 @@ class BaseTrainer(ABC):
         self.scheduler = None
         self.optimizer = None
         self.model = None
-        self.train_loader, self.test_loader, self.val_loader = None, None, None
+        self.train_loader, self.test_loader = None, None
         self.local_rank = args.local_rank
         self.writer = None
         self.num_points = cfg.data.n_sample_points
@@ -66,14 +67,18 @@ class BaseTrainer(ABC):
         loaders = get_data_loaders(self.cfg.data, self.args)
         train_loader = loaders['train_loader']
         test_loader = loaders['test_loader']
-        val_loader = loaders['val_loader']
 
-        return train_loader, test_loader, val_loader
+        return train_loader, test_loader
 
     def train_epochs(self):
         cfg, args = self.cfg, self.args
         writer = self.writer
         train_loader = self.train_loader
+
+        if cfg.vis.log_freq <= -1:  # treat as per epoch
+            cfg.vis.log_freq = int(- cfg.vis.log_freq * len(train_loader))
+        if cfg.vis.vis_freq <= -1:
+            cfg.vis.vis_freq = - cfg.vis.vis_freq * len(train_loader)
 
         logger.info('[GPU {}] Starting training for {} epochs'.format(args.local_rank, cfg.training.epochs))
 
@@ -119,13 +124,13 @@ class BaseTrainer(ABC):
                     tic_log = time.time()
 
                 # -- visualize rec and samples -- #
-                if step % int(cfg.log_freq) == 0 and args.global_rank == 0 and not step == 0:
+                if step % int(cfg.vis.log_freq) == 0 and args.global_rank == 0 and not step == 0:
                     avg_loss = np.array(epoch_loss).mean()
                     epoch_loss = []  # clean up epoch loss
                     self.log_loss({'epo_loss': avg_loss},
                                   writer=writer, step=step)
-                    visualize = int(cfg.viz_freq) > 0 and \
-                        (step) % int(cfg.viz_freq) == 0
+                    visualize = int(cfg.vis.vis_freq) > 0 and \
+                        (step) % int(cfg.vis.vis_freq) == 0
                     if visualize:
                         self.vis_recont(batch, writer, step)
                         self.model.eval()
@@ -147,16 +152,16 @@ class BaseTrainer(ABC):
                 )
                 tic_log = time.time()
 
-            if epoch % int(cfg.save_freq) == 0 and int(cfg.save_freq) > 0 and args.global_rank == 0:
+            if epoch % int(cfg.vis.save_freq) == 0 and int(cfg.vis.save_freq) > 0 and args.global_rank == 0:
                 save_path = self.save(epoch=epoch, step=step)
                 logger.info(f"Checkpoint saved at {save_path} [Epoch] {epoch}")
             
-            if (time.time() - tic_global) / 60 > cfg.save_time and args.global_rank == 0:
+            if (time.time() - tic_global) / 60 > cfg.vis.save_time and args.global_rank == 0:
                 save_path = self.save(epoch=epoch, step=step, save_name='snapshot.pth')
                 logger.info(f"Checkpoint saved at {save_path}, [Time] {(time.time() - start_time) / 60}h")
                 tic_global = time.time()
 
-            if int(cfg.val_freq) > 0 and epoch % int(cfg.val_freq) == 0 and args.global_rank == 0:
+            if int(cfg.vis.val_freq) > 0 and epoch % int(cfg.vis.val_freq) == 0 and args.global_rank == 0:
                 score = self.eval_nll(step=epoch)
                 if score < self.best_eval_score or self.best_eval_score < 0:
                     self.save(save_name='best_eval.pth',
@@ -175,7 +180,7 @@ class BaseTrainer(ABC):
     def vis_recont(self, batch, writer=None, step=None):
         """ Visualize reconstruction results """
         
-        input = batch['cloud'].to(self.device)
+        input = batch['tr_points'].to(self.device)
         output, labels = self.eval(input)
 
         assert len(input.shape) == len(output.shape) == 3 # (B, Npoints, 3)
@@ -245,17 +250,17 @@ class BaseTrainer(ABC):
 
         gen_pcs, ref_pcs, label_pcs = [], [], []
 
-        data_loader = self.val_loader  # Use validation loader for evaluation
+        data_loader = self.test_loader  # Use validation loader for evaluation
 
         for vid, val_batch in enumerate(data_loader):
             if vid % 30 == 1:
                 logger.info('eval: {}/{}', vid, len(data_loader))
 
-            val_x = val_batch['cloud'].to(device)  # Use 'cloud' key from your dataset
+            val_x = val_batch['tr_points'].to(device)
             
             # Check if normalization data exists in batch
-            m = val_batch['orig_c']
-            s = val_batch['orig_s']
+            m = val_batch['mean']
+            s = val_batch['std']
 
             B, N, C = val_x.shape
             m = m.view(B, 1, -1)
@@ -365,12 +370,12 @@ class BaseTrainer(ABC):
         for batch_idx, batch in enumerate(test_loader):
             if batch_idx >= len_test_loader:
                 break
-            ref_data = batch['cloud'].cpu()
+            ref_data = batch['tr_points'].cpu()
             ref_pcs.append(ref_data)
             
             # Collect normalization parameters if available
-            m = batch['orig_c']
-            s = batch['orig_s']
+            m = batch['mean']
+            s = batch['std']
             ref_mean_pcs.append(m)
             ref_std_pcs.append(s)
         
@@ -382,7 +387,6 @@ class BaseTrainer(ABC):
         
         # Handle distributed training
         if self.args.distributed:
-            import torch.distributed as dist
             gen_pcs = gen_pcs.to(device)
             logger.info(f'Before gather: {gen_pcs.shape}, rank={self.args.global_rank}')
             

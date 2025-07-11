@@ -28,13 +28,14 @@ def visualize_point_clouds_3d(pcl_lst, title_lst=None,
         return visualize_point_clouds_3d_list(pcl_lst, title_lst, vis_order, vis_2D, bound, S, labels)
 
     pcl_lst = [pcl.cpu().detach().numpy() for pcl in pcl_lst]
-    labels = [l.cpu().detach().numpy() if torch.is_tensor(l) else l for l in labels]
 
     if title_lst is None:
         title_lst = [""] * len(pcl_lst)
 
     if labels is None:
         labels = [None] * len(pcl_lst)
+
+    labels = [l.cpu().detach().numpy() if torch.is_tensor(l) else l for l in labels]
 
     fig = plt.figure(figsize=(3 * len(pcl_lst), 3))
     num_col = len(pcl_lst)

@@ -15,16 +15,10 @@ export TF_CPP_MIN_LOG_LEVEL=3
 export TF_ENABLE_ONEDNN_OPTS=0
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
-DATA="chair" # Default category, can be overridden by command line argument
+DATA="airplane" # Default category, can be overridden by command line argument
 NGPU=2 # 
 num_node=1
-BS=16
-total_bs=$(( $NGPU * $BS ))
-
-
-# Configuration
-num_node=1
-BS=16
+BS=32
 total_bs=$(( $NGPU * $BS ))
 
 # Base training command
@@ -35,9 +29,9 @@ DEFAULT_OPTS=(
     "--opt"
     "data.batch_size" "$BS"
     "data.num_workers" "10"
-    "training.epochs" "1000"
+    "training.epochs" "300"
     "training.opt.lr" "1e-4"
-    "model.latent_dim" "512"
+    "model.latent_dim" "1024"
     "data.n_sample_points" "2048"
     "data.categories" "$DATA"
     "model.quantizer" "kl"

@@ -107,7 +107,7 @@ class Encoder(nn.Module):
         assert x.shape[2] >= self.input_dim, f"Expected at least {self.input_dim} dimensions, got {x.shape[2]}"
         
         # Transpose to (B, D, N) format expected by PointNet++
-        # x = x.transpose(1, 2)  # (B, N, D) -> (B, D, N)
+        x = x.transpose(1, 2)  # (B, N, D) -> (B, D, N)
         
         # Extract coordinates and features
         xyz = x[:, :3, :]  # Always use first 3 dims as coordinates
