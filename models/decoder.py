@@ -5,7 +5,6 @@ import math
 import numpy as np
 from typing import List, Tuple, Optional, Dict, Any
 from collections import OrderedDict
-from loguru import logger
 
 from modules.flows import CondRealNVPFlow3DTriple
 from modules.layers import MLP
@@ -233,10 +232,12 @@ class Decoder(nn.Module):
             mixture_weights: weights for each flow (B, n_flows)
         """
         if warmup:
-            # Use uniform weights during warmup
             batch_size = latent_vector.shape[0]
-            return 0.99 * torch.ones(batch_size, self.n_flows, device=latent_vector.device) / self.n_flows \
-                    + 0.01 * self.mixture_weights_enc(latent_vector)
+            with torch.no_grad():
+                weights = self.mixture_weights_enc(latent_vector)
+            # Combine uniform + frozen learned weights
+            uniform = torch.full((batch_size, self.n_flows), 1.0 / self.n_flows, device=latent_vector.device)
+            return 0.999 * uniform + 0.001 * weights
         else:
             # Use learned weights based on latent vector
             return self.mixture_weights_enc(latent_vector)
@@ -421,7 +422,7 @@ class Decoder(nn.Module):
             fre_loss_item = fre_loss(p, out_shape, lmax=self.high_freq_recon_lmax) * 10 ** 7
             recon_loss = (1 - self.high_freq_recon_coeff) * recon_loss + self.high_freq_recon_coeff * fre_loss_item
 
-        return recon_loss
+        return recon_loss, torch.mean(mixture_weights).mean()
 
     def get_pnll(self, output, mixture_weights):
         log_weights = torch.log(mixture_weights + 1e-8)

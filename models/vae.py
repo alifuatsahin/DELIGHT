@@ -188,12 +188,13 @@ class VAE(nn.Module):
         else:
             warmup = False
 
-        recont_loss = self.decoder(p, latent, sampled_cloud_size, warmup)
+        recont_loss, mean_weights = self.decoder(p, latent, sampled_cloud_size, warmup)
 
         output = {
             "loss": recont_loss + entropy_loss,
             "recont_loss": recont_loss,
-            "entropy_loss": entropy_loss
+            "entropy_loss": entropy_loss,
+            "mean_weights": mean_weights,
         }
 
         output.update(info)
