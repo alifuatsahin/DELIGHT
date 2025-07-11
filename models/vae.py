@@ -59,8 +59,8 @@ class VAE(nn.Module):
         Returns:
             Tuple of (reconstructed_samples, flow_labels, mixture_weights)
         """
-        assert len(pc.shape) == 3, f"Expected (B, 3, N), got {pc.shape}"
-        n_sampled_points = pc.shape[2]
+        assert len(pc.shape) == 3, f"Expected (B, N, 3), got {pc.shape}"
+        n_sampled_points = pc.shape[1]
 
         # For reconstruction, we want to use posterior mean (deterministic)
         g_sample, _, _ = self.encode(pc)
