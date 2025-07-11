@@ -130,7 +130,7 @@ class VAE(nn.Module):
 
     def forward(self, p, g, n_sampled_points=None, step=None):
         # p = p.transpose(1, 2)
-        num_points = p.shape[2] if n_sampled_points is None else n_sampled_points
+        num_points = p.shape[1] if n_sampled_points is None else n_sampled_points
 
         latent, kl_loss, info = self.encode(g)
 
