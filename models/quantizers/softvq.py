@@ -55,11 +55,10 @@ class Quantizer(nn.Module):
         batch_size, embedding_dim = z.shape
         assert embedding_dim == self.e_dim, f"Expected input dimension {self.e_dim}, got {embedding_dim}"
 
+        embedding = F.normalize(self.embedding.clone(), p=2, dim=-1)  # Add .clone()
+
         if self.l2_norm:
-            embedding = F.normalize(self.embedding.clone(), p=2, dim=-1)  # Add .clone()
             z = F.normalize(z, p=2, dim=-1)
-        else:
-            embedding = self.embedding  # This is fine
 
         logits = torch.einsum('be, ne -> bn', z, embedding.detach())  # Compute logits
 
@@ -88,8 +87,8 @@ class Quantizer(nn.Module):
 
         entropy_loss = self.entropy_loss_ratio * self.compute_entropy_loss(logits.view(-1, self.n_e), current_tau)
 
-        avg_probs = torch.mean(probs, dim=0).mean()  # Average probabilities
-        max_probs = torch.max(probs, dim=0)[0].mean()  # Maximum probabilities
+        avg_probs = torch.mean(probs, dim=-1).mean()  # Average probabilities
+        max_probs = torch.max(probs, dim=-1)[0].mean()  # Maximum probabilities
 
         info = {
             "avg_probs": avg_probs,

@@ -194,8 +194,12 @@ class VAE(nn.Module):
             "loss": recont_loss + entropy_loss,
             "recont_loss": recont_loss,
             "entropy_loss": entropy_loss,
-            "mean_weights": mean_weights,
         }
+
+        for i, mean_weight in enumerate(mean_weights):
+            output.update({
+                f"w{i+1}": mean_weight
+                })
 
         output.update(info)
 

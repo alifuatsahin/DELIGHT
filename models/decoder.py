@@ -419,7 +419,7 @@ class Decoder(nn.Module):
             fre_loss_item = fre_loss(p, out_shape, lmax=self.high_freq_recon_lmax) * 10 ** 7
             recon_loss = (1 - self.high_freq_recon_coeff) * recon_loss + self.high_freq_recon_coeff * fre_loss_item
 
-        return recon_loss, torch.mean(mixture_weights).mean()
+        return recon_loss, torch.mean(mixture_weights, dim=0)
 
     def get_pnll(self, output, mixture_weights):
         log_weights = torch.log(mixture_weights + 1e-8)
