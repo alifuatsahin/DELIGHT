@@ -36,6 +36,7 @@ DEFAULT_OPTS=(
     "data.categories" "$DATA"
     "model.quantizer" "kl"
     "training.type" "vae"
+    "model.soft_vq.n_e" "64"
 )
 
 # Combine base command with default options and any additional arguments
