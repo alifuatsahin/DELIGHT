@@ -156,11 +156,11 @@ def get_opt(params, cfgopt, use_ema, other_cfg=None):
 
     elif scheduler_type == 'cosine_anneal_nocycle':
         assert other_cfg is not None, "other_cfg required for cosine_anneal_nocycle scheduler"
-        final_lr_ratio = float(getattr(cfgopt, "final_lr_ratio", 0.01))
+        final_lr_ratio = float(getattr(cfgopt, "final_lr_ratio", 0.05))
         start_ratio = float(getattr(cfgopt, "start_ratio", 0.6))
         total_epoch = int(other_cfg.training.epochs)  # CRITICAL: Need total training duration
-        
-        eta_min = float(cfgopt.lr) * final_lr_ratio  # Minimum LR (1% of initial)
+
+        eta_min = float(cfgopt.lr) * final_lr_ratio  # Minimum LR (5% of initial)
         eta_max = float(cfgopt.lr)                   # Maximum LR (initial LR)
         T_max = total_epoch * (1 - start_ratio)      # Cosine cycle duration
 

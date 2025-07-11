@@ -29,14 +29,14 @@ DEFAULT_OPTS=(
     "--opt"
     "data.batch_size" "$BS"
     "data.num_workers" "10"
-    "training.epochs" "1000"
-    "training.opt.lr" "1e-4"
-    "model.latent_dim" "512"
+    "training.epochs" "300"
+    "training.opt.lr" "1e-3"
+    "model.latent_dim" "1024"
     "data.n_sample_points" "2048"
     "data.categories" "$DATA"
-    "model.quantizer" "kl"
+    "model.quantizer" "softvq"
     "training.type" "vae"
-    "model.soft_vq.n_e" "128"
+    "model.soft_vq.n_e" "64"
 )
 
 # Combine base command with default options and any additional arguments

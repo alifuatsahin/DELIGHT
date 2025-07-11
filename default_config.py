@@ -2,6 +2,8 @@ from third_party.yacs_config import CfgNode as CN
 
 cfg = CN()
 
+cfg.exp_name = ''
+
 cfg.model = CN()
 cfg.model.latent_dim = 1024
 cfg.model.input_dim = 3
@@ -27,6 +29,8 @@ cfg.model.min_kl_coeff = 1e-7  # Minimum KL coefficient
 cfg.model.constant_portion = 0.0  # Portion of epochs with constant KL coefficient
 cfg.model.anneal_portion = 0.5  # Portion of epochs for annealing
 cfg.model.kl_weight = 1  # KL weight for quantization loss
+cfg.model.high_freq_recon_coeff = 0.0  # Coefficient for high-frequency reconstruction loss
+cfg.model.high_freq_recon_lmax = 50  # Maximum frequency for high-frequency reconstruction
 
 cfg.model.klquantizer = CN()
 cfg.model.klquantizer.n_layers = 1
@@ -76,10 +80,9 @@ cfg.training.opt.ema = False
 cfg.training.opt.ema_decay = 0.9999
 cfg.training.opt.scheduler = 'cosine_anneal_nocycle'
 
-# Add missing configuration
-cfg.exp_name = ''
-cfg.log_freq = 50
-cfg.viz_freq = 100
-cfg.save_freq = 50
-cfg.val_freq = 50
-cfg.save_time = 30  # minutes
+cfg.vis = CN()
+cfg.vis.log_freq = -1
+cfg.vis.vis_freq = -50
+cfg.vis.save_freq = 400
+cfg.vis.val_freq = 100
+cfg.vis.save_time = 30  # minutes

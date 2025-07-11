@@ -75,6 +75,11 @@ class BaseTrainer(ABC):
         writer = self.writer
         train_loader = self.train_loader
 
+        if cfg.vis.log_freq <= -1:  # treat as per epoch
+            cfg.vis.log_freq = int(- cfg.vis.log_freq * len(train_loader))
+        if cfg.vis.vis_freq <= -1:
+            cfg.vis.vis_freq = - cfg.vis.vis_freq * len(train_loader)
+
         logger.info('[GPU {}] Starting training for {} epochs'.format(args.local_rank, cfg.training.epochs))
 
         tic_global = time.time()
@@ -119,13 +124,13 @@ class BaseTrainer(ABC):
                     tic_log = time.time()
 
                 # -- visualize rec and samples -- #
-                if step % int(cfg.log_freq) == 0 and args.global_rank == 0 and not step == 0:
+                if step % int(cfg.vis.log_freq) == 0 and args.global_rank == 0 and not step == 0:
                     avg_loss = np.array(epoch_loss).mean()
                     epoch_loss = []  # clean up epoch loss
                     self.log_loss({'epo_loss': avg_loss},
                                   writer=writer, step=step)
-                    visualize = int(cfg.viz_freq) > 0 and \
-                        (step) % int(cfg.viz_freq) == 0
+                    visualize = int(cfg.vis.vis_freq) > 0 and \
+                        (step) % int(cfg.vis.vis_freq) == 0
                     if visualize:
                         self.vis_recont(batch, writer, step)
                         self.model.eval()
@@ -147,16 +152,16 @@ class BaseTrainer(ABC):
                 )
                 tic_log = time.time()
 
-            if epoch % int(cfg.save_freq) == 0 and int(cfg.save_freq) > 0 and args.global_rank == 0:
+            if epoch % int(cfg.vis.save_freq) == 0 and int(cfg.vis.save_freq) > 0 and args.global_rank == 0:
                 save_path = self.save(epoch=epoch, step=step)
                 logger.info(f"Checkpoint saved at {save_path} [Epoch] {epoch}")
             
-            if (time.time() - tic_global) / 60 > cfg.save_time and args.global_rank == 0:
+            if (time.time() - tic_global) / 60 > cfg.vis.save_time and args.global_rank == 0:
                 save_path = self.save(epoch=epoch, step=step, save_name='snapshot.pth')
                 logger.info(f"Checkpoint saved at {save_path}, [Time] {(time.time() - start_time) / 60}h")
                 tic_global = time.time()
 
-            if int(cfg.val_freq) > 0 and epoch % int(cfg.val_freq) == 0 and args.global_rank == 0:
+            if int(cfg.vis.val_freq) > 0 and epoch % int(cfg.vis.val_freq) == 0 and args.global_rank == 0:
                 score = self.eval_nll(step=epoch)
                 if score < self.best_eval_score or self.best_eval_score < 0:
                     self.save(save_name='best_eval.pth',

@@ -121,7 +121,10 @@ def get_args():
         config.save_dir = config.log_dir = config.log_name = base_dir + eval_suffix
     else:
         # For training, create organized directory structure
-        base_exp_dir = os.path.join(args.exp_root, config.training.type)
+        if config.training.type == 'ddpm':
+            base_exp_dir = os.path.join(args.exp_root, config.training.type)
+        else:
+            base_exp_dir = os.path.join(args.exp_root, config.training.type + '_' + config.model.quantizer)
         config.log_name = os.path.join(base_exp_dir, config.exp_name)
         config.save_dir = os.path.join(base_exp_dir, config.exp_name)  
         config.log_dir = os.path.join(base_exp_dir, config.exp_name)
