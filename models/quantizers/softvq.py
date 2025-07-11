@@ -8,6 +8,7 @@ class Quantizer(nn.Module):
         self.n_e = cfg.model.soft_vq.n_e
         self.e_dim = cfg.model.latent_dim
 
+        self.num_codebooks = cfg.model.soft_vq.num_codebooks
         self.learnable = cfg.model.soft_vq.learnable
         self.tau_min = cfg.model.soft_vq.tau_min
         self.tau_max = cfg.model.soft_vq.tau_max
