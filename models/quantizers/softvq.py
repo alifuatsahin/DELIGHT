@@ -8,7 +8,6 @@ class Quantizer(nn.Module):
         self.n_e = cfg.model.soft_vq.n_e
         self.e_dim = cfg.model.latent_dim
 
-        self.num_codebooks = cfg.model.num_codebooks
         self.learnable = cfg.model.soft_vq.learnable
         self.tau_min = cfg.model.soft_vq.tau_min
         self.tau_max = cfg.model.soft_vq.tau_max
@@ -55,7 +54,7 @@ class Quantizer(nn.Module):
         batch_size, embedding_dim = z.shape
         assert embedding_dim == self.e_dim, f"Expected input dimension {self.e_dim}, got {embedding_dim}"
 
-        embedding = F.normalize(self.embedding.clone(), p=2, dim=-1)  # Add .clone()
+        embedding = F.normalize(self.embedding, p=2, dim=-1) if self.l2_norm else self.embedding
 
         if self.l2_norm:
             z = F.normalize(z, p=2, dim=-1)
@@ -80,10 +79,11 @@ class Quantizer(nn.Module):
             self.codebook_used[:-cur_len].copy_(self.codebook_used[cur_len:].clone())
             self.codebook_used[-cur_len:].copy_(indices)
 
-        codebook_usage = torch.tensor([
-            len(torch.unique(self.codebook_used[k])) / self.n_e 
-            for k in range(self.num_codebooks)
-        ]).mean() if self.show_usage else 0
+        if self.show_usage:
+            unique_codes = torch.unique(self.codebook_used)
+            codebook_usage = unique_codes.numel() / self.n_e
+        else:
+            codebook_usage = 0
 
         entropy_loss = self.entropy_loss_ratio * self.compute_entropy_loss(logits.view(-1, self.n_e), current_tau)
 

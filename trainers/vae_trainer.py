@@ -109,10 +109,6 @@ class Trainer(BaseTrainer):
         self.grad_scalar.step(self.optimizer)
         self.grad_scalar.update()
 
-        if self.writer is not None and "codebook_usage" in logs_dict:
-            codebook_usage = logs_dict.pop('codebook_usage')
-            self.writer.add_histogram('codebook_usage', codebook_usage.detach().cpu().item(), step)
-
         # Log metrics efficiently
         if self.writer is not None and step is not None:
             for k, v in logs_dict.items():
