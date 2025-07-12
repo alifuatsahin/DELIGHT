@@ -18,7 +18,7 @@ export TORCH_DISTRIBUTED_DEBUG=DETAIL
 DATA="airplane" # Default category, can be overridden by command line argument
 NGPU=2 # 
 num_node=1
-BS=32
+BS=16
 total_bs=$(( $NGPU * $BS ))
 
 # Base training command

@@ -37,7 +37,7 @@ class Decoder(nn.Module):
         recon_loss = -log_px.mean()
 
         if self.high_freq_recon_coeff > 0:
-            fre_loss_item = fre_loss(p, y, lmax=self.high_freq_recon_lmax) * 10 ** 7
+            fre_loss_item = fre_loss(p, y, lmax=self.high_freq_recon_lmax) * 5 * 10 ** 6
             recon_loss = (1 - self.high_freq_recon_coeff) * recon_loss + self.high_freq_recon_coeff * fre_loss_item
 
         return recon_loss
