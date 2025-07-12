@@ -53,6 +53,10 @@ class Writer:
                 self.add_scalar(name, value.avg, step=step)
             self.meter_dict = {}
 
+    def close(self, *args, **kwargs):
+        if self.rank == 0 and self.writer is not None:
+            self.writer.close()
+
 
 def init(rank, seed=0, save_dir=None):
     logger.info('[INIT] at rank={}, seed={}', rank, seed)

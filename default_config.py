@@ -65,7 +65,7 @@ cfg.training.type = "vae"  # or "ddpm"
 
 cfg.training.opt = CN()
 cfg.training.opt.type = 'adamw'
-cfg.training.opt.lr = 0.001
+cfg.training.opt.lr = 0.0002
 cfg.training.opt.beta1 = 0.9
 cfg.training.opt.beta2 = 0.999
 cfg.training.opt.weight_decay = 0.01

@@ -34,20 +34,20 @@ class WeightsMLP(nn.Module):
                 self.features.add_module('mlp{}_swish'.format(i), nn.GELU())
 
         self.alphas = nn.Sequential(OrderedDict([
-            ('alpha_mlp0', nn.Linear(in_features, out_features, bias=True))
+            ('alpha_mlp0', nn.Linear(in_features, out_features, bias=True)),
+            ('softplus', nn.Softplus())
         ]))
 
         with torch.no_grad():
-            self.alphas[-1].weight.data.normal_(std=alpha_weight_std)
-            nn.init.constant_(self.alphas[-1].bias.data, alpha_bias)
+            self.alphas[0].weight.data.normal_(std=alpha_weight_std)
+            nn.init.constant_(self.alphas[0].bias.data, alpha_bias)
 
     def forward(self, input):
         if self.n_layers > 0:
             features = self.features(input)
         else:
             features = input
-        raw_alphas = self.alphas(features)
-        alphas = F.softplus(raw_alphas) + 1
+        alphas = torch.clamp(self.alphas(features) + 1, min=1)
         dirichlet = torch.distributions.Dirichlet(alphas)
         weights = dirichlet.rsample()
 
@@ -237,8 +237,9 @@ class Decoder(nn.Module):
             return weights
         else:
             # Use learned weights based on latent vector
-            return self.mixture_weights_enc(latent_vector)
-    
+            weights = self.mixture_weights_enc(latent_vector)
+            return weights
+
     def reparametrize(
         self, 
         mus: torch.Tensor, 
@@ -422,7 +423,7 @@ class Decoder(nn.Module):
         return recon_loss, torch.mean(mixture_weights, dim=0)
 
     def get_pnll(self, output, mixture_weights):
-        log_weights = torch.log(mixture_weights + 1e-8)
+        log_weights = torch.log(mixture_weights)  # Avoid log(0)
         log_weights = log_weights.unsqueeze(1)
         
         num_patches = len(output)
