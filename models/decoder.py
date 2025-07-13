@@ -7,7 +7,7 @@ from typing import List, Tuple, Optional, Dict, Any
 from collections import OrderedDict
 
 from modules.flows import CondRealNVPFlow3DTriple
-from modules.layers import MLP
+from modules.layers import MLP, Swish
 from modules.fre_loss import fre_loss
     
 class WeightsMLP(nn.Module):
@@ -30,8 +30,8 @@ class WeightsMLP(nn.Module):
             self.features = nn.Sequential()
             for i in range(n_layers):
                 self.features.add_module('mlp{}'.format(i), nn.Linear(in_features, in_features, bias=False))
-                self.features.add_module('mlp{}_bn'.format(i), nn.LayerNorm(in_features))
-                self.features.add_module('mlp{}_swish'.format(i), nn.GELU())
+                self.features.add_module('mlp{}_bn'.format(i), nn.BatchNorm1d(in_features))
+                self.features.add_module('mlp{}_swish'.format(i), Swish())
 
         self.alphas = nn.Sequential(OrderedDict([
             ('alpha_mlp0', nn.Linear(in_features, out_features, bias=True)),
@@ -284,7 +284,7 @@ class Decoder(nn.Module):
         mixture_weights = self.get_weights(latents, warmup=False)
         
         # Convert to probabilities
-        mixture_probs = mixture_weights.cpu().numpy()
+        mixture_probs = mixture_weights.detach().cpu().numpy()
 
         # Pre-allocate output tensors
         all_samples = torch.zeros(
