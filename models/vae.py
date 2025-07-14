@@ -13,7 +13,7 @@ class VAE(nn.Module):
         self.latent_dim = cfg.model.latent_dim
         self.training_epochs = cfg.training.epochs
 
-        self.encoder = Encoder(cfg.model.input_dim)
+        self.encoder = Encoder(cfg.model.input_dim, sa_blocks=cfg.model.sa_blocks)
         self.decoder = Decoder(cfg.model)
         
         self.anneal_kl = cfg.model.anneal_kl

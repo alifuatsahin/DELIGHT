@@ -6,8 +6,9 @@ class Quantizer(nn.Module):
     def __init__(self, cfg, input_dim):
         super().__init__()
         self.n_e = cfg.model.soft_vq.n_e
-        self.e_dim = cfg.model.latent_dim
+        self.e_dim = cfg.model.soft_vq.e_dim
 
+        self.num_codebooks = cfg.model.soft_vq.num_codebooks
         self.learnable = cfg.model.soft_vq.learnable
         self.tau_min = cfg.model.soft_vq.tau_min
         self.tau_max = cfg.model.soft_vq.tau_max
@@ -22,17 +23,17 @@ class Quantizer(nn.Module):
         self.show_usage = cfg.model.soft_vq.show_usage
         self.l2_norm = cfg.model.soft_vq.l2_norm
 
-        self.mlp = nn.Linear(input_dim, self.e_dim)  # MLP to project input to codebook size
+        self.mlp = nn.Linear(input_dim, cfg.model.latent_dim)  # MLP to project input to codebook size
         
-        # Initialize embedding as a learnable parameter
-        self.embedding = nn.Parameter(torch.randn(self.n_e, self.e_dim))
+        # Single embedding layer for all codebooks
+        self.embedding = nn.Parameter(torch.randn(self.num_codebooks, self.n_e, self.e_dim))
         self.embedding.data.uniform_(-1.0 / self.n_e, 1.0 / self.n_e)
 
         if self.l2_norm:
             self.embedding.data = F.normalize(self.embedding.data, p=2, dim=-1)
 
         if self.show_usage:
-            self.register_buffer("codebook_used", torch.zeros(65536))
+            self.register_buffer("codebook_used", torch.zeros(self.num_codebooks, 65536))
 
     @property
     def tau(self):
@@ -47,49 +48,87 @@ class Quantizer(nn.Module):
             z: Input tensor of shape (B, latent_dim).
         """
 
-        assert features.dim() == 2, f"Expected input shape (B, input_dim), got {features.shape}"
+        z = self.mlp(features)  # Project input to codebook size
 
-        z = self.mlp(features)
+        z = z.view(z.size(0), -1, self.e_dim)  # Reshape to (B, seq_length, e_dim)
 
-        batch_size, embedding_dim = z.shape
-        assert embedding_dim == self.e_dim, f"Expected input dimension {self.e_dim}, got {embedding_dim}"
+        # Handle different input shapes
+        if z.dim() == 4:
+            z = torch.einsum('b c h w -> b h w c', z).contiguous()
+            z = z.view(z.size(0), -1, z.size(-1))
 
+        if z.dim() == 2:
+            z = z.unsqueeze(1)
+        
+        batch_size, seq_length, _ = z.shape
+        
+        # Ensure sequence length is divisible by number of codebooks
+        assert seq_length % self.num_codebooks == 0, \
+            f"Sequence length ({seq_length}) must be divisible by number of codebooks ({self.num_codebooks})"
+        
+        segment_length = seq_length // self.num_codebooks
+        z_segments = z.view(batch_size, self.num_codebooks, segment_length, self.e_dim)
+        
+        # Apply L2 norm if needed
+        embedding = F.normalize(self.embedding, p=2, dim=-1) if self.l2_norm else self.embedding
         if self.l2_norm:
-            embedding = F.normalize(self.embedding.clone(), p=2, dim=-1)
-            z = F.normalize(z, p=2, dim=-1)
-        else:
-            embedding = self.embedding
-
-        logits = torch.einsum('be, ne -> bn', z, embedding.detach())  # Compute logits
+            z_segments = F.normalize(z_segments, p=2, dim=-1)
+            
+        z_flat = z_segments.permute(1, 0, 2, 3).contiguous().view(self.num_codebooks, -1, self.e_dim)
+        
+        logits = torch.einsum('nbe, nke -> nbk', z_flat, embedding.detach())
 
         current_tau = self.tau
-        probs = F.softmax(logits / current_tau, dim=-1)  # Compute probabilities
+        
+        # Calculate probabilities
+        probs = F.softmax(logits / current_tau, dim=-1)
 
-        z_q = torch.einsum('bn, ne -> be', probs, embedding)  # Quantize input
-        z_q = z_q.view(batch_size, self.e_dim)  # Reshape back to original input shape
-
+        # Quantize
+        z_q = torch.einsum('nbk, nke -> nbe', probs, embedding)
+        
+        # Reshape back
+        z_q = z_q.view(self.num_codebooks, batch_size, segment_length, self.e_dim).permute(1, 0, 2, 3).contiguous()
+        
+        
         # Calculate cosine similarity
         with torch.no_grad():
-            zq_z_cos = F.cosine_similarity(z, z_q, dim=-1).mean()
-
-        indices = torch.argmax(probs, dim=-1)  # Get indices of quantized vectors
-
+            zq_z_cos = F.cosine_similarity(
+                z_segments.view(-1, self.e_dim),
+                z_q.view(-1, self.e_dim),
+                dim=-1
+            ).mean()
+        
+        # Get indices for usage tracking
+        indices = torch.argmax(probs, dim=-1)  # (batch*segment_length, num_codebooks)
+        
         # Track codebook usage
         if self.show_usage and self.training:
-            cur_len = indices.size(0)
-            self.codebook_used[:-cur_len].copy_(self.codebook_used[cur_len:].clone())
-            self.codebook_used[-cur_len:].copy_(indices)
-
-        if self.show_usage:
-            unique_codes = torch.unique(self.codebook_used)
-            codebook_usage = unique_codes.numel() / self.n_e
+            for k in range(self.num_codebooks):
+                cur_len = indices.size(0)
+                self.codebook_used[k, :-cur_len].copy_(self.codebook_used[k, cur_len:].clone())
+                self.codebook_used[k, -cur_len:].copy_(indices[:, k])
+        
+        # Calculate losses if training
+        if self.training:
+            entropy_loss = self.entropy_loss_ratio * self.compute_entropy_loss(logits.view(-1, self.n_e), tau=current_tau)
         else:
-            codebook_usage = 0
+            entropy_loss = 0.0
 
-        entropy_loss = self.entropy_loss_ratio * self.compute_entropy_loss(logits.view(-1, self.n_e), current_tau)
+        # Calculate codebook usage
+        codebook_usage = torch.tensor([
+            len(torch.unique(self.codebook_used[k])) / self.n_e 
+            for k in range(self.num_codebooks)
+        ]).mean() if self.show_usage else 0
 
-        avg_probs = torch.mean(probs, dim=0).mean()  # Average probabilities
-        max_probs = torch.max(probs, dim=0)[0].mean()  # Maximum probabilities
+        z_q = z_q.view(batch_size, -1, self.e_dim).contiguous()
+        
+        # Reshape back to match original input shape
+        if len(z.shape) == 4:
+            z_q = torch.einsum('b h w c -> b c h w', z_q)
+        
+        # Calculate average probabilities
+        avg_probs = torch.mean(torch.mean(probs, dim=-1))
+        max_probs = torch.mean(torch.max(probs, dim=-1)[0])
 
         info = {
             "avg_probs": avg_probs,
@@ -99,7 +138,7 @@ class Quantizer(nn.Module):
             "codebook_usage": codebook_usage
         }
 
-        return z_q, entropy_loss, info
+        return z_q.view(z.size(0), -1), entropy_loss, info
 
     def compute_entropy_loss(self, affinity, tau=None):
         if tau is None:
@@ -120,15 +159,16 @@ class Quantizer(nn.Module):
     
     @torch.no_grad()
     def sample(self, batch_size, device=None):
-        """Sample random codes from the codebook"""
         if device is None:
-            device = self.device
+            device = self.embedding.device
 
-        # Sample random indices
-        indices = torch.randint(0, self.n_e, (batch_size,), device=device)
-        
-        # Get corresponding embeddings
-        embedding = F.normalize(self.embedding, p=2, dim=-1) if self.l2_norm else self.embedding
-        z_sampled = embedding[indices]  # [batch_size, e_dim]
-        
+        # Sample random indices for each codebook and batch
+        indices = torch.randint(0, self.n_e, (batch_size, self.num_codebooks), device=device)  # [B, num_codebooks]
+        embedding = F.normalize(self.embedding, p=2, dim=-1) if self.l2_norm else self.embedding  # [num_codebooks, n_e, e_dim]
+
+        # Gather embeddings for each codebook and batch
+        z_sampled = []
+        for k in range(self.num_codebooks):
+            z_sampled.append(embedding[k][indices[:, k]])  # [B, e_dim]
+        z_sampled = torch.cat(z_sampled, dim=-1)  # [B, num_codebooks * e_dim]
         return z_sampled

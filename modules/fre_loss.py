@@ -18,7 +18,7 @@ def project_pc_on_unit_sphere(batch, nlat, nlon, knn_k=5, knn_sigma=0.05, return
     B, npc, _ = batch.shape
 
     pc_x, pc_y, pc_z = normalized_batch[..., 0], normalized_batch[..., 1], normalized_batch[..., 2]
-    pc_r = torch.sqrt(pc_x * pc_x + pc_y * pc_y + pc_z * pc_z)
+    pc_r = torch.sqrt(pc_x * pc_x + pc_y * pc_y + pc_z * pc_z) + 1e-8
     pc_lat = torch.arcsin(pc_z / pc_r)
     pc_lon = torch.atan2(pc_y, pc_x) % (2 * torch.pi)
     pc_lat = pc_lat.reshape(B, npc, 1)
@@ -35,7 +35,7 @@ def project_pc_on_unit_sphere(batch, nlat, nlon, knn_k=5, knn_sigma=0.05, return
     gaussian_coeffs = gaussian_coeffs - zero_inds * gaussian_coeffs
     zero_rows_inds = zero_inds.all(dim=1, keepdim=True).expand(-1, knn_k, -1)
     gaussian_coeffs = gaussian_coeffs + zero_rows_inds * (1 / knn_k)
-    gaussian_coeffs = gaussian_coeffs / gaussian_coeffs.sum(dim=1, keepdim=True)
+    gaussian_coeffs = gaussian_coeffs / (gaussian_coeffs.sum(dim=1, keepdim=True) + 1e-8)
     grids = (gaussian_coeffs * pc_r.unsqueeze(-1).expand(-1, -1, ngrid).gather(dim=1, index=inds)).sum(dim=1)
     grids = grids.reshape(B, nlat, nlon)
     if return_true_point_indices:
@@ -44,7 +44,7 @@ def project_pc_on_unit_sphere(batch, nlat, nlon, knn_k=5, knn_sigma=0.05, return
     return grids
 
 
-def extract_high_freq(batch, lmax=50, sigma=50, device="cuda" if torch.cuda.is_available() else "cpu"):
+def extract_high_freq(batch, device, lmax=50, sigma=50):
     nlat = 2 * lmax + 2
     nlon = nlat * 2
     nlat += 1
@@ -65,8 +65,8 @@ def extract_high_freq(batch, lmax=50, sigma=50, device="cuda" if torch.cuda.is_a
     return torch.cat(all_coeffs, dim=1)
 
 
-def fre_loss(batch1, batch2, lmax=50, sigma=50):
+def fre_loss(batch1, batch2, lmax=50, sigma=50, device="cuda" if torch.cuda.is_available() else "cpu"):
     assert batch1.shape == batch2.shape
-    coeffs1 = extract_high_freq(batch1, lmax=lmax, sigma=sigma)
-    coeffs2 = extract_high_freq(batch2, lmax=lmax, sigma=sigma)
+    coeffs1 = extract_high_freq(batch1, device=device, lmax=lmax, sigma=sigma)
+    coeffs2 = extract_high_freq(batch2, device=device, lmax=lmax, sigma=sigma)
     return torch.nn.functional.mse_loss(coeffs1, coeffs2)

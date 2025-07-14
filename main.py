@@ -28,13 +28,13 @@ if __name__ == "__main__":
     input_dim = cfg.model.input_dim
     N = 2048  # Number of points, can be adjusted as needed
 
-    p = torch.randn(B, N, input_dim, device=device).permute(0, 2, 1)  # On CUDA if available
-    g = torch.randn(B, N, input_dim, device=device).permute(0, 2, 1)  # Change to (B, input_dim, N)
+    p = torch.randn(B, N, input_dim, device=device)  # On CUDA if available
+    g = torch.randn(B, N, input_dim, device=device)  # Change to (B, input_dim, N)
     labels = torch.randint(0, 4, (B, N), device=device)  # Random labels for testing
     output = model(p, g)
 
-    print(f"Shape of the input point cloud: {p.shape}")
-    print(f"Shape of the generated output: {output.shape}")
+    # print(f"Shape of the input point cloud: {p.shape}")
+    # print(f"Generated output: {output}")
 
     # _, samples, labels, mixture_weights_logits = model.sample(n_sampled_points=N*2, n_samples=B)
     # print(f"Shape of the input point cloud: {p.shape}")
