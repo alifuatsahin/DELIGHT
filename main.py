@@ -1,37 +1,41 @@
-from models.vae import VAE
-from default_config import cfg
-from utils.eval_helper import compute_NLL_metric
-# from latent_diffusion.ldm.models.diffusion.ddpm import LatentDiffusion
-
-from models.encoder import Encoder
+# from models.vae import VAE
+# from default_config import cfg
+# from utils.eval_helper import compute_NLL_metric
+from latent_diffusion.ldm.models.diffusion.ddpm import LatentDiffusion
 
 import torch
 
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    path = 'vae_model.pth'  # Path to save the model state
+    # path = 'vae_model.pth'  # Path to save the model state
 
-    model = VAE(cfg).to(device)
-    model.eval()
+    # model = VAE(cfg).to(device)
+    # model.eval()
     # input = torch.rand((5, 2048, 3), device=device, dtype=torch.float32)  # Example input tensor
 
-    # diff_model_config = {"target": "ldm.modules.diffusionmodules.openaimodel.UNetModel",
-    #                 "params": {"dims": 1, "in_channels": 1, "model_channels": 320, "up_down_sampling": True,
-    #                             "attention_resolutions": (2, 4, 8), "channel_mult": (1, 2, 4, 4), "num_res_blocks": 3}}
+    diff_model_config = {"target": "ldm.modules.diffusionmodules.openaimodel.UNetModel",
+                    "params": {"dims": 1, "in_channels": 1, "model_channels": 256, "up_down_sampling": True,
+                                "attention_resolutions": (2, 4, 8), "channel_mult": (1, 2, 4, 4), "num_res_blocks": 3}}
 
-    # model = LatentDiffusion(diff_model_config=diff_model_config, conditioning_key=None).to(device)
+    model = LatentDiffusion(diff_model_config=diff_model_config, conditioning_key=None).to(device)
+
+    latent = torch.randn(10, 1, 512, device=device)  # Example latent vector
+
+    output = model(latent, None)  # Forward pass with dummy conditioning
+
+    print(f"Output: {output}")
 
     # torch.save(model, 'diffusion_model.pth')
 
-    B = 10
-    input_dim = cfg.model.input_dim
-    N = 2048  # Number of points, can be adjusted as needed
+    # B = 10
+    # input_dim = cfg.model.input_dim
+    # N = 2048  # Number of points, can be adjusted as needed
 
-    p = torch.randn(B, N, input_dim, device=device)  # On CUDA if available
-    g = torch.randn(B, N, input_dim, device=device)  # Change to (B, input_dim, N)
-    labels = torch.randint(0, 4, (B, N), device=device)  # Random labels for testing
-    output = model(p, g)
+    # p = torch.randn(B, N, input_dim, device=device)  # On CUDA if available
+    # g = torch.randn(B, N, input_dim, device=device)  # Change to (B, input_dim, N)
+    # labels = torch.randint(0, 4, (B, N), device=device)  # Random labels for testing
+    # output = model(p, g)
 
     # print(f"Shape of the input point cloud: {p.shape}")
     # print(f"Generated output: {output}")

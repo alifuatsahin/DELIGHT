@@ -14,12 +14,12 @@ import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 from einops import rearrange, repeat
-from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
-from ldm.models.diffusion.ddim import DDIMSampler
-from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
-from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
-from ldm.modules.ema import LitEma
-from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, count_params, instantiate_from_config
+from latent_diffusion.ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
+from latent_diffusion.ldm.models.diffusion.ddim import DDIMSampler
+from latent_diffusion.ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
+from latent_diffusion.ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
+from latent_diffusion.ldm.modules.ema import LitEma
+from latent_diffusion.ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, count_params, instantiate_from_config
 from torch.optim.lr_scheduler import LambdaLR
 from torchvision.utils import make_grid
 from tqdm import tqdm

@@ -3,7 +3,7 @@
 # SLURM Options
 #SBATCH -o delight.out-%j
 #SBATCH -c 10
-#SBATCH --gres=gpu:volta:2
+#SBATCH --gres=gpu:volta:1
 #SBATCH -p debug-gpu
 
 export PYTHONPATH="~/Pasta/DELIGHT:~/DELIGHT/latent_diffusion:$PYTHONPATH"

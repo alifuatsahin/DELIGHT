@@ -41,9 +41,9 @@ cfg.model.klquantizer = CN()
 cfg.model.klquantizer.n_layers = 1
 
 cfg.model.soft_vq = CN()
-cfg.model.soft_vq.n_e = 2048  # Number of embeddings
-cfg.model.soft_vq.e_dim = 64  # Embedding dimension
-cfg.model.soft_vq.num_codebooks = 1  # Number of codebooks
+cfg.model.soft_vq.n_e = 64  # Number of embeddings
+cfg.model.soft_vq.e_dim = 16  # Embedding dimension
+cfg.model.soft_vq.num_codebooks = 64  # Number of codebooks
 cfg.model.soft_vq.learnable = True  # Whether to learn the temperature
 cfg.model.soft_vq.tau_min = 0.01  # Minimum temperature
 cfg.model.soft_vq.tau_max = 0.2  # Maximum temperature

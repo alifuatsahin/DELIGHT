@@ -118,8 +118,8 @@ class Encoder(nn.Module):
             features, xyz, _ = layer((features, xyz, None))
 
         
-        # Global max pooling to get fixed-size representation
-        # features: (B, D, N) -> (B, D)
-        global_features = features.max(dim=-1)[0]
+        # # Global max pooling to get fixed-size representation
+        # # features: (B, D, N) -> (B, D)
+        # global_features = features.max(dim=-1)[0]
         
-        return global_features
+        return features, xyz

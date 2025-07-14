@@ -1,12 +1,18 @@
 import torch 
 import torch.nn as nn 
-import torch.nn.functional as F 
+import torch.nn.functional as F
+
+from modules.pvcnn2 import PointNetSAModule
 
 class Quantizer(nn.Module):
     def __init__(self, cfg, input_dim):
         super().__init__()
         self.n_e = cfg.model.soft_vq.n_e
         self.e_dim = cfg.model.soft_vq.e_dim
+
+        assert cfg.model.latent_dim % self.e_dim == 0, \
+            f"latent_dim ({cfg.model.latent_dim}) must be divisible by e_dim ({self.e_dim})"
+        self.sequence_len = cfg.model.latent_dim // self.e_dim
 
         self.num_codebooks = cfg.model.soft_vq.num_codebooks
         self.learnable = cfg.model.soft_vq.learnable
@@ -23,8 +29,14 @@ class Quantizer(nn.Module):
         self.show_usage = cfg.model.soft_vq.show_usage
         self.l2_norm = cfg.model.soft_vq.l2_norm
 
-        self.mlp = nn.Linear(input_dim, cfg.model.latent_dim)  # MLP to project input to codebook size
-        
+        self.pre_quant_layer = PointNetSAModule(
+            num_centers=self.sequence_len, 
+            radius=0.2, 
+            num_neighbors=32, 
+            in_channels=input_dim, 
+            out_channels=[self.e_dim]
+        )
+
         # Single embedding layer for all codebooks
         self.embedding = nn.Parameter(torch.randn(self.num_codebooks, self.n_e, self.e_dim))
         self.embedding.data.uniform_(-1.0 / self.n_e, 1.0 / self.n_e)
@@ -42,23 +54,18 @@ class Quantizer(nn.Module):
         else:
             return self.initial_tau
 
-    def forward(self, features):
+    def forward(self, features, xyz, *args, **kwargs):
         """
         Args:
-            z: Input tensor of shape (B, latent_dim).
+            z: Input tensor.
         """
-
-        z = self.mlp(features)  # Project input to codebook size
-
-        z = z.view(z.size(0), -1, self.e_dim)  # Reshape to (B, seq_length, e_dim)
+        features, _, _ = self.pre_quant_layer((features, xyz, None))  # Project input to codebook size
+        z = features.transpose(1, 2).contiguous()  # (B, e_dim, sequence_len)
 
         # Handle different input shapes
         if z.dim() == 4:
             z = torch.einsum('b c h w -> b h w c', z).contiguous()
             z = z.view(z.size(0), -1, z.size(-1))
-
-        if z.dim() == 2:
-            z = z.unsqueeze(1)
         
         batch_size, seq_length, _ = z.shape
         
@@ -104,9 +111,9 @@ class Quantizer(nn.Module):
         # Track codebook usage
         if self.show_usage and self.training:
             for k in range(self.num_codebooks):
-                cur_len = indices.size(0)
+                cur_len = indices.size(1)
                 self.codebook_used[k, :-cur_len].copy_(self.codebook_used[k, cur_len:].clone())
-                self.codebook_used[k, -cur_len:].copy_(indices[:, k])
+                self.codebook_used[k, -cur_len:].copy_(indices[k, :])
         
         # Calculate losses if training
         if self.training:
@@ -162,13 +169,25 @@ class Quantizer(nn.Module):
         if device is None:
             device = self.embedding.device
 
-        # Sample random indices for each codebook and batch
-        indices = torch.randint(0, self.n_e, (batch_size, self.num_codebooks), device=device)  # [B, num_codebooks]
+        sequence_len = self.sequence_len
+
+        assert sequence_len % self.num_codebooks == 0, "sequence_len must be divisible by num_codebooks"
+        segment_length = sequence_len // self.num_codebooks
+
+        # Sample random indices for each codebook, batch, and segment
+        indices = torch.randint(
+            0, self.n_e, 
+            (batch_size, self.num_codebooks, segment_length), 
+            device=device
+        )  # [B, num_codebooks, segment_length]
+
         embedding = F.normalize(self.embedding, p=2, dim=-1) if self.l2_norm else self.embedding  # [num_codebooks, n_e, e_dim]
 
-        # Gather embeddings for each codebook and batch
+        # Gather embeddings for each codebook, batch, and segment
         z_sampled = []
         for k in range(self.num_codebooks):
-            z_sampled.append(embedding[k][indices[:, k]])  # [B, e_dim]
-        z_sampled = torch.cat(z_sampled, dim=-1)  # [B, num_codebooks * e_dim]
-        return z_sampled
+            # indices[:, k]: [B, segment_length]
+            z_sampled.append(embedding[k][indices[:, k]])  # [B, segment_length, e_dim]
+        z_sampled = torch.stack(z_sampled, dim=1)  # [B, num_codebooks, segment_length, e_dim]
+        z_sampled = z_sampled.view(batch_size, sequence_len, self.e_dim)  # [B, sequence_len, e_dim]
+        return z_sampled.view(batch_size, -1)

@@ -42,9 +42,9 @@ class VAE(nn.Module):
             latent: sampled latent representation (B, latent_dim)
             kl_loss: KL divergence loss for the quantizer
         """
-        encoded_features = self.encoder(x)
+        encoded_features, xyz = self.encoder(x)
 
-        latent, kl_loss, info = self.quantizer(encoded_features)
+        latent, kl_loss, info = self.quantizer(encoded_features, xyz=xyz)
 
         return latent, kl_loss, info
 
