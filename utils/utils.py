@@ -160,7 +160,7 @@ def get_opt(params, cfgopt, use_ema, other_cfg=None):
 
     elif scheduler_type == 'cosine_anneal_nocycle':
         assert other_cfg is not None, "other_cfg required for cosine_anneal_nocycle scheduler"
-        final_lr_ratio = float(getattr(cfgopt, "final_lr_ratio", 0.1))
+        final_lr_ratio = float(getattr(cfgopt, "final_lr_ratio", 0.01))
         start_ratio = float(getattr(cfgopt, "start_ratio", 0.6))
         total_epoch = int(other_cfg.training.epochs)  # CRITICAL: Need total training duration
         
@@ -177,9 +177,11 @@ def get_opt(params, cfgopt, use_ema, other_cfg=None):
 
     elif scheduler_type == 'cosine_anneal':
         assert other_cfg is not None, "other_cfg required for cosine_anneal scheduler"
+        final_lr_ratio = float(getattr(cfgopt, "final_lr_ratio", 0.01))
         num_cycles = int(getattr(cfgopt, "num_cycles", 10))
         total_epoch = int(other_cfg.training.epochs)  # CRITICAL: Need total training duration
         T_max = total_epoch / num_cycles
+        eta_min = float(cfgopt.lr) * final_lr_ratio
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max, eta_min=eta_min)
 
     else:

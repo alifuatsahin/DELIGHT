@@ -133,7 +133,6 @@ def get_args():
 
     # save config and log
     if args.global_rank == 0 and not args.eval:
-        logger.add(config.log_dir + '/train.log')
         logger.info('Exp root: {} + exp name: {}, save dir: {}', args.exp_root,
                     config.exp_name, config.save_dir)
         saved_cfg = os.path.join(config.log_dir, 'config.yml')
@@ -154,8 +153,6 @@ def get_args():
             f.write(f"Latent Dimension: {config.model.latent_dim}\n")
         logger.info('Save experiment info at {}', exp_info_file)
 
-    elif args.eval:
-        logger.add(config.log_dir + '/eval_gen.log')
     logger.info('Log dir: {}', config.log_dir)
 
     return args, config
@@ -168,6 +165,12 @@ def main_worker(local_rank, args, config):
     args.distributed = args.num_gpus > 1
 
     logger.info(f'Node rank {args.node_rank}, local proc {local_rank}, global proc {args.global_rank}')
+
+
+    if args.global_rank == 0 and not args.eval:
+        logger.add(os.path.join(config.log_dir, 'train.log'))
+    elif args.eval:
+        logger.add(os.path.join(config.log_dir, 'eval_gen.log'))
 
     # Initialize distributed training if needed
     if args.distributed:

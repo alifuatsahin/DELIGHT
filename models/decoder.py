@@ -16,15 +16,15 @@ class WeightsMLP(nn.Module):
         n_layers,
         in_features,
         out_features,
-        alpha_weight_std=0.001,
-        alpha_bias=0.0,
+        out_weight_std=0.001,
+        out_bias=0.0,
     ):
         super().__init__()
         self.n_layers = n_layers
         self.in_features = in_features
         self.out_features = out_features
-        self.alpha_weight_std = alpha_weight_std
-        self.alpha_bias = alpha_bias
+        self.out_weight_std = out_weight_std
+        self.out_bias = out_bias
 
         if n_layers > 0:
             self.features = nn.Sequential()
@@ -33,25 +33,29 @@ class WeightsMLP(nn.Module):
                 self.features.add_module('mlp{}_bn'.format(i), nn.BatchNorm1d(in_features))
                 self.features.add_module('mlp{}_swish'.format(i), Swish())
 
-        self.alphas = nn.Sequential(OrderedDict([
-            ('alpha_mlp0', nn.Linear(in_features, out_features, bias=True)),
-            ('softplus', nn.Softplus())
+        self.output = nn.Sequential(OrderedDict([
+            ('out_mlp0', nn.Linear(in_features, out_features, bias=True)),
+            # ('softplus', nn.Softplus())
         ]))
 
         with torch.no_grad():
-            self.alphas[0].weight.data.normal_(std=alpha_weight_std)
-            nn.init.constant_(self.alphas[0].bias.data, alpha_bias)
+            self.output[0].weight.data.normal_(std=out_weight_std)
+            nn.init.constant_(self.output[0].bias.data, out_bias)
 
     def forward(self, input):
         if self.n_layers > 0:
             features = self.features(input)
         else:
             features = input
-        alphas = torch.clamp(self.alphas(features) + 1, min=1)
-        dirichlet = torch.distributions.Dirichlet(alphas)
-        weights = dirichlet.rsample()
+        # alphas = torch.clamp(self.output(features) + 1, min=1)
+        # dirichlet = torch.distributions.Dirichlet(alphas)
+        # weights = dirichlet.rsample()
 
-        return weights
+        feats = self.features(features)
+        output = self.output(feats)
+        log_weights = F.log_softmax(output, dim=-1)
+
+        return log_weights
 
 class DecBlock(nn.Module):
     def __init__(
@@ -134,8 +138,8 @@ class Decoder(nn.Module):
             n_layers=cfg.weight_n_layers,
             in_features=self.latent_dim,
             out_features=self.n_flows,
-            alpha_weight_std=0.001,
-            alpha_bias=0.0
+            out_weight_std=0.001,
+            out_bias=0.0
         )
 
         # Prior network for initial point generation
@@ -233,12 +237,12 @@ class Decoder(nn.Module):
         """
         if warmup:
             batch_size = latent_vector.shape[0]
-            weights = torch.full((batch_size, self.n_flows), 1.0 / self.n_flows, device=latent_vector.device)
-            return weights
+            log_weights = torch.log(torch.full((batch_size, self.n_flows), 1.0 / self.n_flows, device=latent_vector.device))
+            return log_weights
         else:
             # Use learned weights based on latent vector
-            weights = self.mixture_weights_enc(latent_vector)
-            return weights
+            log_weights = self.mixture_weights_enc(latent_vector)
+            return log_weights
 
     def reparametrize(
         self, 
@@ -281,10 +285,10 @@ class Decoder(nn.Module):
         device = latents.device
 
         # Get mixture weights for all samples at once
-        mixture_weights = self.get_weights(latents, warmup=False)
-        
+        mixture_weights_logits = self.get_weights(latents, warmup=False)
+
         # Convert to probabilities
-        mixture_probs = mixture_weights.detach().cpu().numpy()
+        mixture_probs = torch.exp(mixture_weights_logits).detach().cpu().numpy()
 
         # Pre-allocate output tensors
         all_samples = torch.zeros(
@@ -369,7 +373,8 @@ class Decoder(nn.Module):
             - mixture_weights_logits: mixture weights (B, n_flows)
         """
         batch_size = g.shape[0]
-        mixture_weights = self.get_weights(g, warmup=warmup)
+        mixture_weights_logits = self.get_weights(g, warmup=warmup)
+        mixture_weights = torch.exp(mixture_weights_logits)
 
         if self.high_freq_recon_coeff > 0:
             flow_assignments = torch.multinomial(mixture_weights, n_sampled_points, replacement=True)
@@ -414,7 +419,7 @@ class Decoder(nn.Module):
                 
             output.append(flow_out)
 
-        recon_loss = self.get_pnll(output, mixture_weights)
+        recon_loss = self.get_pnll(output, mixture_weights_logits)
 
         if self.high_freq_recon_coeff > 0:
             fre_loss_item = fre_loss(p, out_shape, lmax=self.high_freq_recon_lmax) * 10 ** 7
@@ -422,9 +427,9 @@ class Decoder(nn.Module):
 
         return recon_loss, torch.mean(mixture_weights, dim=0)
 
-    def get_pnll(self, output, mixture_weights):
-        log_weights = torch.log(mixture_weights)  # Avoid log(0)
-        log_weights = log_weights.unsqueeze(1)
+    def get_pnll(self, output, mixture_weights_logits):
+        # log_weights = torch.log(mixture_weights)  # Avoid log(0)
+        log_weights = mixture_weights_logits.unsqueeze(1)
         
         num_patches = len(output)
         num_batches = output[0]['p_prior_mus'][0].shape[0]

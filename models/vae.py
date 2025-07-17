@@ -14,7 +14,7 @@ class VAE(nn.Module):
         self.warmup_epochs = cfg.training.warmup
         self.training_epochs = cfg.training.epochs
 
-        self.encoder = Encoder(cfg.model.input_dim)
+        self.encoder = Encoder(cfg.model.input_dim, sa_blocks=cfg.model.sa_blocks)
         self.decoder = Decoder(cfg.model)
         
         self.anneal_kl = cfg.model.anneal_kl
@@ -41,9 +41,9 @@ class VAE(nn.Module):
             latent: sampled latent representation (B, latent_dim)
             entropy_loss: KL divergence loss for the quantizer
         """
-        encoded_features = self.encoder(x)
+        encoded_features, xyz = self.encoder(x)
 
-        latent, entropy_loss, info = self.quantizer(encoded_features)
+        latent, entropy_loss, info = self.quantizer(encoded_features, xyz=xyz)
 
         return latent, entropy_loss, info
 

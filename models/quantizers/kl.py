@@ -7,16 +7,16 @@ class Quantizer(nn.Module):
 
         self.latent_dim = cfg.model.latent_dim
 
-        self.mlp = nn.Linear(input_dim, self.latent_dim * 2)
+        self.pre_quant_layer = nn.Linear(input_dim, self.latent_dim * 2)
 
         with torch.no_grad():
             # Initialize mu part (first half) with small std
-            self.mlp.weight.data[:self.latent_dim].normal_(std=0.0033)
-            self.mlp.bias.data[:self.latent_dim].fill_(0.0)
-            
+            self.pre_quant_layer.weight.data[:self.latent_dim].normal_(std=0.0033)
+            self.pre_quant_layer.bias.data[:self.latent_dim].fill_(0.0)
+
             # Initialize logvar part (second half) with different std
-            self.mlp.weight.data[self.latent_dim:].normal_(std=0.033)
-            self.mlp.bias.data[self.latent_dim:].fill_(0.0)
+            self.pre_quant_layer.weight.data[self.latent_dim:].normal_(std=0.033)
+            self.pre_quant_layer.bias.data[self.latent_dim:].fill_(0.0)
 
     @staticmethod
     def reparameterize(mean, logvar):
@@ -28,14 +28,19 @@ class Quantizer(nn.Module):
     @staticmethod
     def sample_gaussian(size, device):
         y = torch.randn(*size).float().to(device)
+
         return y
     
-    def forward(self, features):
+    def forward(self, features, *args, **kwargs):
         """
         Forward pass for the KLQuantizer module.
         """
+        # Global max pooling to get fixed-size representation
+        # features: (B, D, N) -> (B, D)
+        features = features.max(dim=-1)[0]
+
         # get posterior distribution from point cloud features
-        features = self.mlp(features)
+        features = self.pre_quant_layer(features)
         mus, log_vars = features[:, :self.latent_dim], features[:, self.latent_dim:]
         g_samples = self.reparameterize(mus, log_vars)
 
@@ -63,7 +68,7 @@ class Quantizer(nn.Module):
     @torch.no_grad()
     def sample(self, batch_size, device):
         """
-        Sample random codes from the codebook.
+        Sample random codes from gaussian distribution.
         Args:
             batch_size: Number of samples to generate.
             device: Device to place the samples on.
