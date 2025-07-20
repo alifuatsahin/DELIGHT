@@ -28,7 +28,7 @@ BASE_CMD="python train.py --num_gpus $NGPU"
 DEFAULT_OPTS=(
     "--opt"
     "data.batch_size" "$BS"
-    "data.num_workers" "100"
+    "data.num_workers" "10"
     "training.epochs" "500"
     "training.opt.lr" "1e-4"
     "model.latent_dim" "1024"
@@ -36,10 +36,10 @@ DEFAULT_OPTS=(
     "data.categories" "$DATA"
     "model.quantizer" "softvq"
     "training.type" "vae"
-    "model.soft_vq.e_dim" "32"
-    "model.soft_vq.n_e" "48"
-    "model.soft_vq.num_codebooks" "32"
-    "model.anneal_kl" "False"
+    "model.soft_vq.e_dim" "16"
+    "model.soft_vq.n_e" "56"
+    "model.soft_vq.num_codebooks" "64"
+    "model.anneal_kl" "True"
 )
 
 # Combine base command with default options and any additional arguments

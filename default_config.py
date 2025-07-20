@@ -5,10 +5,11 @@ cfg = CN()
 cfg.exp_name = ''
 
 cfg.model = CN()
-cfg.model.sa_blocks = [
-    [[32, 2, 32], [1024, 0.1, 32, [32, 64]]],
-    [[64, 1, 16], [256, 0.2, 32, [64, 128]]],
-    [[128, 1, 16], [128, 0.4, 64, [128, 512, 1024]]],
+cfg.model.sa_blocks = [ # conv_configs, sa_configs
+        ((32, 2, 32), (1024, 0.1, 32, (32, 64))),
+        ((64, 3, 16), (256, 0.2, 32, (64, 128))),
+        ((128, 3, 8), (128, 0.4, 32, (128, 128))),
+        (None, (64, 0.8, 32, (128, 128, 128))), 
 ]
 cfg.model.latent_dim = 512
 cfg.model.input_dim = 3
@@ -36,9 +37,9 @@ cfg.model.soft_vq.learnable = True  # Whether to learn the temperature
 cfg.model.soft_vq.tau_min = 0.03  # Minimum temperature
 cfg.model.soft_vq.tau_max = 0.3  # Maximum temperature
 cfg.model.soft_vq.tau = 0.07  # (Initial) Temperature for softmax
-cfg.model.soft_vq.entropy_loss_ratio = 10 # Ratio for entropy loss (0.01)
+cfg.model.soft_vq.entropy_loss_ratio = 100 # Ratio for entropy loss (0.01)
 cfg.model.soft_vq.show_usage = True  # Track codebook usage
-cfg.model.soft_vq.l2_norm = True  # Normalize embeddings
+cfg.model.soft_vq.l2_norm = False  # Normalize embeddings
 
 cfg.data = CN()
 cfg.data.dataset = 'ShapeNetCore.v2'
@@ -73,7 +74,7 @@ cfg.training.opt.beta2 = 0.999
 cfg.training.opt.weight_decay = 0.01
 cfg.training.opt.ema = False
 cfg.training.opt.ema_decay = 0.9999
-cfg.training.opt.scheduler = 'cosine_anneal'
+cfg.training.opt.scheduler = 'step'
 
 # Add missing configuration
 cfg.vis = CN()
