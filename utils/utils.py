@@ -125,8 +125,8 @@ def get_opt(params, cfgopt, use_ema, other_cfg=None):
         scheduler = optim.lr_scheduler.ExponentialLR(optimizer, decay)
         
     elif scheduler_type == 'step':
-        step_size = int(getattr(cfgopt, "step_epoch", 500))
-        decay = float(getattr(cfgopt, "step_decay", 0.1))
+        step_size = int(getattr(cfgopt, "step_epoch", 50))
+        decay = float(getattr(cfgopt, "step_decay", 0.6))
         scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=decay)
         
     elif scheduler_type == 'linear':
@@ -178,6 +178,8 @@ def get_opt(params, cfgopt, use_ema, other_cfg=None):
     elif scheduler_type == 'cosine_anneal':
         assert other_cfg is not None, "other_cfg required for cosine_anneal scheduler"
         num_cycles = int(getattr(cfgopt, "num_cycles", 10))
+        final_lr_ratio = float(getattr(cfgopt, "final_lr_ratio", 0.1))
+        eta_min = float(cfgopt.lr) * final_lr_ratio
         total_epoch = int(other_cfg.training.epochs)  # CRITICAL: Need total training duration
         T_max = total_epoch / num_cycles
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max, eta_min=eta_min)

@@ -34,8 +34,12 @@ DEFAULT_OPTS=(
     "model.latent_dim" "1024"
     "data.n_sample_points" "2048"
     "data.categories" "$DATA"
-    "model.quantizer" "softvq"
+    "model.quantizer" "kl"
     "training.type" "vae"
+    "model.soft_vq.e_dim" "16"
+    "model.soft_vq.n_e" "128"
+    "model.soft_vq.num_codebooks" "64"
+    "model.anneal_kl" "True"
 )
 
 # Combine base command with default options and any additional arguments
