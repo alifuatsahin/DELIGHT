@@ -5,12 +5,12 @@ cfg = CN()
 cfg.exp_name = ''
 
 cfg.model = CN()
-cfg.model.sa_blocks = [ # conv_configs, sa_configs
-        ((32, 2, 32), (1024, 0.1, 32, (32, 64))),
-        ((64, 3, 16), (256, 0.2, 32, (64, 128))),
-        ((128, 3, 8), (128, 0.4, 32, (128, 128))),
-        (None, (64, 0.8, 32, (128, 128, 128))), 
-]
+# cfg.model.sa_blocks = [ # conv_configs, sa_configs
+#         ((32, 2, 32), (1024, 0.1, 32, (32, 64))),
+#         ((64, 3, 16), (256, 0.2, 32, (64, 128))),
+#         ((128, 3, 8), (128, 0.4, 32, (128, 128))),
+#         (None, (64, 0.8, 32, (128, 128, 128))), 
+# ]::
 cfg.model.latent_dim = 512
 cfg.model.input_dim = 3
 cfg.model.n_flows = 4

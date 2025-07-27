@@ -39,7 +39,7 @@ DEFAULT_OPTS=(
     "model.soft_vq.e_dim" "16"
     "model.soft_vq.n_e" "56"
     "model.soft_vq.num_codebooks" "64"
-    "model.anneal_kl" "True"
+    "model.anneal_kl" "False"
 )
 
 # Combine base command with default options and any additional arguments
