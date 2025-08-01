@@ -123,7 +123,8 @@ class Trainer(BaseTrainer):
         # Use EMA weights if available
         if self.cfg.training.opt.ema:
             self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
-        
+        was_training = self.model.training
+        self.model.eval()
         try:
             if hasattr(self.model, 'module'):
                 samples, labels = self.model.module.sample(n_sampled_points, n_samples)
@@ -131,6 +132,8 @@ class Trainer(BaseTrainer):
                 samples, labels = self.model.sample(n_sampled_points, n_samples)
             output = samples.permute(0, 2, 1).contiguous()  # B3N->BN3
         finally:
+            if was_training:
+                self.model.train()
             if self.cfg.training.opt.ema:
                 self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
 

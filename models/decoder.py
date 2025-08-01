@@ -35,7 +35,6 @@ class WeightsMLP(nn.Module):
 
         self.output = nn.Sequential(OrderedDict([
             ('out_mlp0', nn.Linear(in_features, out_features, bias=True)),
-            # ('softplus', nn.Softplus())
         ]))
 
         with torch.no_grad():
@@ -43,15 +42,7 @@ class WeightsMLP(nn.Module):
             nn.init.constant_(self.output[0].bias.data, out_bias)
 
     def forward(self, input):
-        if self.n_layers > 0:
-            features = self.features(input)
-        else:
-            features = input
-        # alphas = torch.clamp(self.output(features) + 1, min=1)
-        # dirichlet = torch.distributions.Dirichlet(alphas)
-        # weights = dirichlet.rsample()
-
-        feats = self.features(features)
+        feats = self.features(input)
         output = self.output(feats)
         log_weights = F.log_softmax(output, dim=-1)
 
@@ -428,7 +419,6 @@ class Decoder(nn.Module):
         return recon_loss, torch.mean(mixture_weights, dim=0)
 
     def get_pnll(self, output, mixture_weights_logits):
-        # log_weights = torch.log(mixture_weights)  # Avoid log(0)
         log_weights = mixture_weights_logits.unsqueeze(1)
         
         num_patches = len(output)
