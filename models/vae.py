@@ -14,7 +14,7 @@ class VAE(nn.Module):
         self.warmup_epochs = cfg.training.warmup
         self.training_epochs = cfg.training.epochs
 
-        self.encoder = Encoder(cfg.model.input_dim, sa_blocks=cfg.model.sa_blocks)
+        self.encoder = Encoder(cfg.model.input_dim, sa_blocks=getattr(cfg.model, 'sa_blocks', None))
         self.decoder = Decoder(cfg.model)
         
         self.anneal_kl = cfg.model.anneal_kl

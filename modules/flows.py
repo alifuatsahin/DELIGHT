@@ -1,9 +1,11 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from collections import OrderedDict
 
 from .layers import SharedDot, Swish
+from .RQS import unconstrained_RQS
 
 class CondRealNVPFlow3D(nn.Module):
     def __init__(self, flow_feat_dim, latent_dim,
@@ -152,85 +154,211 @@ class CondRealNVPFlow3DTriple(nn.Module):
 
         return [p1, p2, p3], [mu1, mu2, mu3], [logvar1, logvar2, logvar3]
     
+class FCNN(nn.Module):
+    """
+    Simple fully connected neural network.
+    """
+    def __init__(self, in_dim, out_dim, hidden_dim):
+        super().__init__()
+        self.network = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, out_dim),
+        )
+
+    def forward(self, x):
+        return self.network(x)
+
+class NSF_CL(nn.Module):
+    """
+    Neural spline flow, coupling layer.
+
+    [Durkan et al. 2019]
+    """
+    def __init__(self, dim, K = 5, B = 3, hidden_dim = 8, base_network = FCNN):
+        super().__init__()
+        self.dim = dim
+        self.K = K
+        self.B = B
+        self.f1 = base_network(dim // 2, (3 * K - 1) * dim // 2, hidden_dim)
+        self.f2 = base_network(dim // 2, (3 * K - 1) * dim // 2, hidden_dim)
+
+    def forward(self, x):
+        log_det = torch.zeros(x.shape[0])
+        lower, upper = x[:, :self.dim // 2], x[:, self.dim // 2:]
+        out = self.f1(lower).reshape(-1, self.dim // 2, 3 * self.K - 1)
+        W, H, D = torch.split(out, self.K, dim = 2)
+        W, H = torch.softmax(W, dim = 2), torch.softmax(H, dim = 2)
+        W, H = 2 * self.B * W, 2 * self.B * H
+        D = F.softplus(D)
+        upper, ld = unconstrained_RQS(
+            upper, W, H, D, inverse=False, tail_bound=self.B)
+        log_det += torch.sum(ld, dim = 1)
+        out = self.f2(upper).reshape(-1, self.dim // 2, 3 * self.K - 1)
+        W, H, D = torch.split(out, self.K, dim = 2)
+        W, H = torch.softmax(W, dim = 2), torch.softmax(H, dim = 2)
+        W, H = 2 * self.B * W, 2 * self.B * H
+        D = F.softplus(D)
+        lower, ld = unconstrained_RQS(
+            lower, W, H, D, inverse=False, tail_bound=self.B)
+        log_det += torch.sum(ld, dim = 1)
+        return torch.cat([lower, upper], dim = 1), log_det
+
+    def inverse(self, z):
+        log_det = torch.zeros(z.shape[0])
+        lower, upper = z[:, :self.dim // 2], z[:, self.dim // 2:]
+        out = self.f2(upper).reshape(-1, self.dim // 2, 3 * self.K - 1)
+        W, H, D = torch.split(out, self.K, dim = 2)
+        W, H = torch.softmax(W, dim = 2), torch.softmax(H, dim = 2)
+        W, H = 2 * self.B * W, 2 * self.B * H
+        D = F.softplus(D)
+        lower, ld = unconstrained_RQS(
+            lower, W, H, D, inverse=True, tail_bound=self.B)
+        log_det += torch.sum(ld, dim = 1)
+        out = self.f1(lower).reshape(-1, self.dim // 2, 3 * self.K - 1)
+        W, H, D = torch.split(out, self.K, dim = 2)
+        W, H = torch.softmax(W, dim = 2), torch.softmax(H, dim = 2)
+        W, H = 2 * self.B * W, 2 * self.B * H
+        D = F.softplus(D)
+        upper, ld = unconstrained_RQS(
+            upper, W, H, D, inverse = True, tail_bound = self.B)
+        log_det += torch.sum(ld, dim = 1)
+        return torch.cat([lower, upper], dim = 1), log_det
+
+class CondLayer(nn.Module):
+    def __init__(self, in_dim, out_dim, hidden_dim=8):
+        super().__init__()
+        self.network = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim, bias=False),
+            nn.BatchNorm1d(hidden_dim),
+            Swish(),
+            nn.Linear(hidden_dim, out_dim, bias=True)
+        )
     
-class RealNVPFlow(nn.Module):
-    def __init__(self, flow_feat_dim, latent_dim, weight_std=0.01, warp_inds=[0], eps=1e-6):
-        super(RealNVPFlow, self).__init__()
-        self.flow_feat_dim = flow_feat_dim
-        self.latent_dim = latent_dim
-        self.weight_std = weight_std
-        self.warp_inds = warp_inds
-        self.keep_inds = list(np.arange(latent_dim))
+    def forward(self, x):
+        return self.network(x)
+
+class CondNSFTriple3D(nn.Module):
+    """
+    Neural spline flow for 3D data with triple coupling layers.
+    """
+    def __init__(self, flow_feat_dim, latent_dim, K=5, B=3, n_features=3, eps=1e-6):
+        super().__init__()
+        self.K = K
+        self.B = B
+        self.indices = np.arange(n_features)
         self.register_buffer('eps', torch.from_numpy(np.array([eps], dtype=np.float32)))
-        for ind in self.warp_inds:
-            self.keep_inds.remove(ind)
+        self.init_layers(flow_feat_dim, latent_dim)
 
-        self.T_mu_0 = nn.Sequential(OrderedDict([
-            ('mu_mlp0', nn.Linear(len(self.keep_inds), self.flow_feat_dim, bias=False)),
-            ('mu_mlp0_bn', nn.BatchNorm1d(self.flow_feat_dim)),
-            ('mu_mlp0_swish', Swish()),
-            ('mu_mlp1', nn.Linear(self.flow_feat_dim, len(self.warp_inds), bias=True))
-        ]))
-        with torch.no_grad():
-            self.T_mu_0[-1].weight.data.normal_(std=self.weight_std)
-            nn.init.constant_(self.T_mu_0[-1].bias.data, 0.0)
+    def init_layers(self, flow_feat_dim, latent_dim):
+        """
+        Initialize the layers for the flow.
+        """
+        self.W0 = nn.Sequential(
+            SharedDot(len(self.indices)-1, flow_feat_dim, 1),
+            nn.BatchNorm1d(flow_feat_dim),
+            nn.ReLU(inplace=True),
+            SharedDot(flow_feat_dim, flow_feat_dim, 1),
+            nn.BatchNorm1d(flow_feat_dim, affine=False)
+        )
+        self.W1 = nn.Sequential(
+            nn.ReLU(inplace=True),
+            SharedDot(flow_feat_dim, 1, 1, bias=True)
+        )
+        self.H0 = nn.Sequential(
+            SharedDot(len(self.indices)-1, flow_feat_dim, 1),
+            nn.BatchNorm1d(flow_feat_dim),
+            nn.ReLU(inplace=True),
+            SharedDot(flow_feat_dim, flow_feat_dim, 1),
+            nn.BatchNorm1d(flow_feat_dim, affine=False)
+        )
+        self.H1 = nn.Sequential(
+            nn.ReLU(inplace=True),
+            SharedDot(flow_feat_dim, 1, 1, bias=True)
+        )
+        self.D0 = nn.Sequential(
+            SharedDot(len(self.indices)-1, flow_feat_dim, 1),
+            nn.BatchNorm1d(flow_feat_dim),
+            nn.ReLU(inplace=True),
+            SharedDot(flow_feat_dim, flow_feat_dim, 1),
+            nn.BatchNorm1d(flow_feat_dim, affine=False)
+        )
+        self.D1 = nn.Sequential(
+            nn.ReLU(inplace=True),
+            SharedDot(flow_feat_dim, 1, 1, bias=True)
+        )
 
-        self.T_logvar_0 = nn.Sequential(OrderedDict([
-            ('logvar_mlp0', nn.Linear(len(self.keep_inds), self.flow_feat_dim, bias=False)),
-            ('logvar_mlp0_bn', nn.BatchNorm1d(self.flow_feat_dim)),
-            ('logvar_mlp0_swish', Swish()),
-            ('logvar_mlp1', nn.Linear(self.flow_feat_dim, len(self.warp_inds), bias=True))
-        ]))
-        with torch.no_grad():
-            self.T_logvar_0[-1].weight.data.normal_(std=self.weight_std)
-            nn.init.constant_(self.T_logvar_0[-1].bias.data, 0.0)
+        # Film conditioning layers
+        self.gammaW = CondLayer(latent_dim, flow_feat_dim, hidden_dim=flow_feat_dim)
+        self.betaW = CondLayer(latent_dim, flow_feat_dim, hidden_dim=flow_feat_dim)
+        self.gammaH = CondLayer(latent_dim, flow_feat_dim, hidden_dim=flow_feat_dim)
+        self.betaH = CondLayer(latent_dim, flow_feat_dim, hidden_dim=flow_feat_dim)
+        self.gammaD = CondLayer(latent_dim, flow_feat_dim, hidden_dim=flow_feat_dim)
+        self.betaD = CondLayer(latent_dim, flow_feat_dim, hidden_dim=flow_feat_dim)
 
-    def forward(self, g, mode='direct'):
-        logvar = torch.zeros_like(g)
-        mu = torch.zeros_like(g)
+    def W_cond(self, x, context, keep_inds):
+        """
+        Film conditioning applied to the specified input with context.
+        """
+        gamma = self.gammaW(torch.add(self.eps, torch.exp(context)).unsqueeze(-1))
+        beta = self.betaW(context).unsqueeze(-1)
+        W_warp = self.W1(gamma * self.W0(x[:, keep_inds, :].contiguous()) + beta)
+        W_warp = torch.softmax(W_warp, dim=2)
+        return 2 * self.B * W_warp
 
-        logvar[:, self.warp_inds] = torch.log(torch.add(
-            self.eps,
-            torch.exp(self.T_logvar_0(g[:, self.keep_inds].contiguous()))
-        ))
-        mu[:, self.warp_inds] = self.T_mu_0(g[:, self.keep_inds].contiguous())
+    def H_cond(self, x, context, keep_inds):
+        """
+        Film conditioning applied to the specified input with context.
+        """
+        gamma = self.gammaH(torch.add(self.eps, torch.exp(context)).unsqueeze(-1))
+        beta = self.betaH(context).unsqueeze(-1)
+        H_warp = self.H1(gamma * self.H0(x[:, keep_inds, :].contiguous()) + beta)
+        H_warp = torch.softmax(H_warp, dim=2)
+        return 2 * self.B * H_warp
+    
+    def D_cond(self, x, context, keep_inds):
+        """
+        Film conditioning applied to the specified input with context.
+        """
+        gamma = self.gammaD(torch.add(self.eps, torch.exp(context)).unsqueeze(-1))
+        beta = self.betaD(context).unsqueeze(-1)
+        D_warp = self.D1(gamma * self.D0(x[:, keep_inds, :].contiguous()) + beta)
+        D_warp = F.softplus(D_warp)
+        return D_warp
 
-        logvar = logvar.contiguous()
-        mu = mu.contiguous()
+    def flow_pass(self, x, context, warp_inds, keep_inds, inverse=False):
+        """
+        Perform a single flow pass through the network.
+        """
+        W = self.W_cond(x, context, keep_inds=keep_inds)
+        H = self.H_cond(x, context, keep_inds=keep_inds)
+        D = self.D_cond(x, context, keep_inds=keep_inds)
 
-        if mode == 'direct':
-            g_out = torch.exp(0.5 * logvar) * g + mu
-        elif mode == 'inverse':
-            g_out = torch.exp(-0.5 * logvar) * (g - mu)
+        warp_out, ld = unconstrained_RQS(
+            x[:, warp_inds, :], W, H, D, inverse=inverse, tail_bound=self.B)
 
-        return g_out, mu, logvar
+        return warp_out, ld
 
+    def forward(self, x, context):
+        log_det = torch.zeros(x.shape[0])
 
-class RealNVPFlowCouple(nn.Module):
-    def __init__(self, flow_feat_dim, latent_dim, weight_std=0.01, pattern=0):
-        super(RealNVPFlowCouple, self).__init__()
-        self.flow_feat_dim = flow_feat_dim
-        self.latent_dim = latent_dim
-        self.weight_std = weight_std
-        self.pattern = pattern
+        for ind in self.indices:
+            keep_inds = [i for i in self.indices if i != ind]
+            out, ld = self.flow_pass(x, context, warp_inds=[ind], keep_inds=keep_inds)
+            log_det += torch.sum(ld, dim=1)
+            x = torch.cat([x[:, keep_inds, :], out], dim=1)
 
-        if pattern == 0:
-            self.nvp1 = RealNVPFlow(flow_feat_dim, latent_dim,
-                                    weight_std=weight_std, warp_inds=list(np.arange(latent_dim)[::2]))
-            self.nvp2 = RealNVPFlow(flow_feat_dim, latent_dim,
-                                    weight_std=weight_std, warp_inds=list(np.arange(latent_dim)[1::2]))
-        elif pattern == 1:
-            self.nvp1 = RealNVPFlow(flow_feat_dim, latent_dim,
-                                    weight_std=weight_std, warp_inds=list(np.arange(latent_dim)[:latent_dim // 2]))
-            self.nvp2 = RealNVPFlow(flow_feat_dim, latent_dim,
-                                    weight_std=weight_std, warp_inds=list(np.arange(latent_dim)[latent_dim // 2:]))
+        return x, log_det
 
-    def forward(self, g, mode='direct'):
-        if mode == 'direct':
-            g1, mu1, logvar1 = self.nvp1(g, mode=mode)
-            g2, mu2, logvar2 = self.nvp2(g1, mode=mode)
-        elif mode == 'inverse':
-            g2, mu2, logvar2 = self.nvp2(g, mode=mode)
-            g1, mu1, logvar1 = self.nvp1(g2, mode=mode)
+    def inverse(self, x, context):
+        log_det = torch.zeros(x.shape[0])
 
-        return [g1, g2], [mu1, mu2], [logvar1, logvar2]
+        for ind in reversed(self.indices):
+            keep_inds = np.delete(self.indices, np.where(self.indices == ind))
+            out, ld = self.flow_pass(x, context, inverse=True, keep_inds=keep_inds)
+            log_det += torch.sum(ld, dim=1)
+            x = torch.cat([x[:, keep_inds, :], out], dim=1)
+
+        return x, log_det
