@@ -34,12 +34,12 @@ DEFAULT_OPTS=(
     "vae.latent_dim" "1024"
     "data.n_sample_points" "2048"
     "data.categories" "$DATA"
-    "vae.quantizer" "softvq"
+    "vae.quantizer" "kl"
     "training.type" "vae"
     "vae.soft_vq.e_dim" "16"
     "vae.soft_vq.n_e" "56"
     "vae.soft_vq.num_codebooks" "64"
-    "vae.anneal_kl" "False"
+    "vae.anneal_kl" "True"
 )
 
 # Combine base command with default options and any additional arguments

@@ -75,7 +75,7 @@ class MLP(nn.Module):
             self.features = nn.Sequential()
             for i in range(n_layers):
                 self.features.add_module('mlp{}'.format(i), nn.Linear(in_features, in_features, bias=False))
-                self.features.add_module('mlp{}_bn'.format(i), nn.LayerNorm(in_features))
+                self.features.add_module('mlp{}_bn'.format(i), nn.BatchNorm1d(in_features))
                 self.features.add_module('mlp{}_swish'.format(i), nn.SiLU())
 
         self.mus = nn.Sequential(OrderedDict([
@@ -103,7 +103,7 @@ class MLP(nn.Module):
         if self.deterministic:
             mus = self.mus(features)
 
-            return mus, torch.zeros_like(mus)
+            return mus, None
         else:
             mus = self.mus(features)
             logvars = self.logvars(features)
