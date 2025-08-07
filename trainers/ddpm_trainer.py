@@ -1,6 +1,7 @@
 from models import VAE
 from .base_trainer import BaseTrainer
 from latent_diffusion.ldm.models.diffusion.ddpm import LatentDiffusion
+from models.ddpm import DDPM
 
 import torch
 import torch.nn as nn
@@ -59,12 +60,13 @@ class Trainer(BaseTrainer):
         checkpoint = torch.load(path, map_location='cpu')
         self.start_epoch = checkpoint['epoch']
         self.model.load_state_dict(checkpoint['ddpm_state_dict'])
+
         # load dae
         self.model = self.model.to(self.device)
         self.optimizer.load_state_dict(checkpoint['ddpm_optimizer'])
         self.scheduler.load_state_dict(checkpoint['ddpm_scheduler'])
-        # load vae
 
+        # load vae
         self.vae.load_state_dict(checkpoint['vae_state_dict'])
         self.vae = self.vae.to(self.device)
 
@@ -83,23 +85,8 @@ class Trainer(BaseTrainer):
         self.vae = VAE(cfg).eval().to(self.device)  # Use eval mode for VAE during training
         self.vae.load_state_dict(torch.load(cfg.vae_checkpoint, map_location=self.device)["model"], strict=True)
 
-        if cfg.model.ddpm_backbone == "unet1":
-            diff_model_config = {"target": "ldm.modules.diffusionmodules.openaimodel.UNetModel",
-                                "params": {"dims": 1, "in_channels": 1, "model_channels": 256, "up_down_sampling": True,
-                                            "attention_resolutions": (2, 4, 8), "channel_mult": (1, 2, 2, 4), "num_res_blocks": 2}}
-        elif cfg.model.ddpm_backbone == "unet1x":
-            diff_model_config = {"target": "ldm.modules.diffusionmodules.openaimodel.UNetModel",
-                                "params": {"dims": 1, "in_channels": 1, "model_channels": 320, "up_down_sampling": True,
-                                            "attention_resolutions": (2, 4, 8), "channel_mult": (1, 2, 4, 4), "num_res_blocks": 3}}
-        elif args.ddpm_backbone == "unet1024":
-            diff_model_config = {"target": "ldm.modules.diffusionmodules.openaimodel.UNetModel",
-                                "params": {"dims": 1, "in_channels": 1024, "model_channels": 1024,
-                                            "up_down_sampling": False}}
-        else:
-            raise NotImplementedError
+        self.model = DDPM(cfg.ddpm, quantizer=cfg.vae.quantizer, ch=cfg.vae.soft_vq.e_dim).to(self.device)
         
-        self.model = LatentDiffusion(diff_model_config=diff_model_config, conditioning_key=None).to(self.device)
-
         if args.distributed:
             self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[args.local_rank], output_device=args.local_rank)
     
@@ -142,7 +129,7 @@ class Trainer(BaseTrainer):
             seeds = range(n_samples)
             
             # Create latent shape based on UNet backbone
-            latent_dim = self.cfg.model.latent_dim  # 128
+            latent_dim = self.cfg.vae.latent_dim  # 128
             latent_shape = (latent_dim,)  # Fallback
             
             # Generate initial noise

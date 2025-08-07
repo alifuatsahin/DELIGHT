@@ -5,7 +5,7 @@ class Quantizer(nn.Module):
     def __init__(self, cfg, input_dim):
         super().__init__()
 
-        self.latent_dim = cfg.model.latent_dim
+        self.latent_dim = cfg.latent_dim
 
         self.pre_quant_layer = nn.Linear(input_dim, self.latent_dim * 2)
 

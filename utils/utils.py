@@ -126,7 +126,7 @@ def get_opt(params, cfgopt, use_ema, other_cfg=None):
         
     elif scheduler_type == 'step':
         step_size = int(getattr(cfgopt, "step_epoch", 50))
-        decay = float(getattr(cfgopt, "step_decay", 0.6))
+        decay = float(getattr(cfgopt, "step_decay", 0.2))
         scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=decay)
         
     elif scheduler_type == 'linear':

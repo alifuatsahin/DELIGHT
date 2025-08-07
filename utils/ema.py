@@ -30,6 +30,7 @@ import os
 
 class EMA(Optimizer):
     def __init__(self, opt, ema_decay):
+        super().__init__(opt.param_groups, {})  # This sets up all internal attributes
         self.ema_decay = ema_decay
         self.apply_ema = self.ema_decay > 0.
         logger.info('[EMA] apply={}', self.apply_ema)
@@ -75,7 +76,7 @@ class EMA(Optimizer):
                 if p.grad is None:
                     continue
                 idx = params[p.shape]['idx']
-                self.optimizer.state[p]['ema'] = ema[p.shape][idx, :]
+                self.optimizer.state[p]['ema'] = ema[p.shape][idx]
                 params[p.shape]['idx'] += 1
 
         return retval
@@ -97,7 +98,7 @@ class EMA(Optimizer):
             warnings.warn(
                 'swap_parameters_with_ema was called when there is no EMA weights.')
             return
-        logger.info('swap with ema')
+        # logger.info('swap with ema')
         count_no_found = 0
         for group in self.optimizer.param_groups:
             for i, p in enumerate(group['params']):
@@ -118,3 +119,6 @@ class EMA(Optimizer):
                     self.optimizer.state[p]['ema'] = tmp
                 else:
                     p.data = ema.detach()
+
+
+# adaptive_decay = min(self.ema_decay, (1 + self.num_updates) / (10 + self.num_updates))

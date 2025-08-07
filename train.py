@@ -26,12 +26,14 @@ def main(args, config):
     snapshot_file = os.path.join(config.save_dir, 'checkpoints', 'snapshot.pth')
 
     # -- check if prev saved ckpt exist -- #
-    if os.path.exists(ckpt_dir) and os.path.exists(snapshot_file):
+    if os.path.exists(ckpt_dir) and os.path.exists(snapshot_file) and args.pretrained is None:
         logger.info(
             '[Detect saved snapshot at the checkpoint dir] resume from preemption!!! ')
         args.resume = True
         args.pretrained = os.path.join(
             config.save_dir, 'checkpoints', 'snapshot.pth')
+    elif args.pretrained is not None:
+        pass  # resume from the provided pretrained model
     else:
         if args.global_rank == 0:
             logger.info('Could not find any checkpoint: {}, (exist={}), or snapshot {}, (exist={})',
@@ -95,10 +97,11 @@ def get_args():
 
     if args.eval or args.resume:
         logger.info('Arguments: {}'.format(args))
-        args.config = os.path.dirname(args.pretrained) + '/../cfg.yaml'
+        args.config = os.path.dirname(args.pretrained) + '/../config.yml'
         config.merge_from_file(args.config)
 
-    config.merge_from_list(args.opt)
+    if args.opt is not None:
+        config.merge_from_list(args.opt)
 
     if config.exp_name == '' or config.exp_name is None:
         timestamp = time.strftime('%Y%m%d_%H%M%S')
@@ -112,36 +115,34 @@ def get_args():
 
         config.exp_name = "_".join(exp_components)
 
-    logger.info(f'Generated experiment name: {config.exp_name}')
+    logger.info(f'Experiment name: {config.exp_name}')
 
     if args.eval:
         # For evaluation, use the existing experiment directory but add eval suffix
         base_dir = os.path.dirname(args.config) if hasattr(args, 'config') else os.path.join(args.exp_root, config.exp_name)
         eval_suffix = f"_eval_{time.strftime('%Y%m%d_%H%M%S')}" if not hasattr(args, 'config') else "_eval"
-        config.save_dir = config.log_dir = config.log_name = base_dir + eval_suffix
+        config.save_dir = base_dir + eval_suffix
     else:
         # For training, create organized directory structure
         if config.training.type == 'ddpm':
             base_exp_dir = os.path.join(args.exp_root, config.training.type)
         else:
-            base_exp_dir = os.path.join(args.exp_root, config.training.type + '_' + config.model.quantizer)
-        config.log_name = os.path.join(base_exp_dir, config.exp_name)
+            base_exp_dir = os.path.join(args.exp_root, config.training.type + '_' + config.vae.quantizer)
         config.save_dir = os.path.join(base_exp_dir, config.exp_name)  
-        config.log_dir = os.path.join(base_exp_dir, config.exp_name)
     
-    os.makedirs(config.log_dir, exist_ok=True)
+    os.makedirs(config.save_dir, exist_ok=True)
 
     # save config and log
     if args.global_rank == 0 and not args.eval:
         logger.info('Exp root: {} + exp name: {}, save dir: {}', args.exp_root,
                     config.exp_name, config.save_dir)
-        saved_cfg = os.path.join(config.log_dir, 'config.yml')
+        saved_cfg = os.path.join(config.save_dir, 'config.yml')
         with open(saved_cfg, 'w') as file:
             file.write(config.dump())
         logger.info('Save config at {}', saved_cfg)
         
         # Also save a human-readable experiment info file
-        exp_info_file = os.path.join(config.log_dir, 'experiment_info.txt')
+        exp_info_file = os.path.join(config.save_dir, 'experiment_info.txt')
         with open(exp_info_file, 'w') as f:
             f.write(f"Experiment Name: {config.exp_name}\n")
             f.write(f"Dataset: {config.data.categories}\n")
@@ -150,10 +151,8 @@ def get_args():
             f.write(f"Learning Rate: {config.training.opt.lr}\n")
             f.write(f"Start Time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"Command Line Args: {' '.join(sys.argv)}\n")
-            f.write(f"Latent Dimension: {config.model.latent_dim}\n")
+            f.write(f"Latent Dimension: {config.vae.latent_dim}\n")
         logger.info('Save experiment info at {}', exp_info_file)
-
-    logger.info('Log dir: {}', config.log_dir)
 
     return args, config
 
@@ -168,9 +167,9 @@ def main_worker(local_rank, args, config):
 
 
     if args.global_rank == 0 and not args.eval:
-        logger.add(os.path.join(config.log_dir, 'train.log'))
+        logger.add(os.path.join(config.save_dir, 'train.log'))
     elif args.eval:
-        logger.add(os.path.join(config.log_dir, 'eval_gen.log'))
+        logger.add(os.path.join(config.save_dir, 'eval_gen.log'))
 
     # Initialize distributed training if needed
     if args.distributed:

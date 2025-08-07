@@ -12,7 +12,7 @@ def get_quantizer(cfg, input_dim):
     Returns:
         An instance of the specified quantizer class.
     """
-    quantizer_type = cfg.model.quantizer
+    quantizer_type = cfg.quantizer
     if quantizer_type == 'kl':
         return KL(cfg, input_dim)
     elif quantizer_type == 'softvq':

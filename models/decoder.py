@@ -7,7 +7,7 @@ from typing import List, Tuple, Optional, Dict, Any
 from collections import OrderedDict
 
 from modules.flows import CondRealNVPFlow3DTriple
-from modules.layers import MLP, Swish
+from modules.layers import MLP
 from modules.fre_loss import fre_loss
     
 class WeightsMLP(nn.Module):
@@ -31,7 +31,7 @@ class WeightsMLP(nn.Module):
             for i in range(n_layers):
                 self.features.add_module('mlp{}'.format(i), nn.Linear(in_features, in_features, bias=False))
                 self.features.add_module('mlp{}_bn'.format(i), nn.BatchNorm1d(in_features))
-                self.features.add_module('mlp{}_swish'.format(i), Swish())
+                self.features.add_module('mlp{}_swish'.format(i), nn.SiLU())
 
         self.output = nn.Sequential(OrderedDict([
             ('out_mlp0', nn.Linear(in_features, out_features, bias=True)),

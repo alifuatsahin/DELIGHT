@@ -23,30 +23,30 @@ class CondRealNVPFlow3D(nn.Module):
             self.keep_inds.remove(ind)
 
         self.T_mu_0 = nn.Sequential(OrderedDict([
-            ('mu_sd0', SharedDot(len(self.keep_inds), self.flow_feat_dim, 1)),
+            ('mu_sd0', nn.Conv1d(len(self.keep_inds), self.flow_feat_dim, kernel_size=1)),
             ('mu_sd0_bn', nn.BatchNorm1d(self.flow_feat_dim)),
             ('mu_sd0_relu', nn.ReLU(inplace=True)),
-            ('mu_sd1', SharedDot(self.flow_feat_dim, self.flow_feat_dim, 1)),
-            ('mu_sd1_bn', nn.BatchNorm1d(self.flow_feat_dim, affine=False))
+            ('mu_sd1', nn.Conv1d(self.flow_feat_dim, self.flow_feat_dim, kernel_size=1)),
+            ('mu_sd1_bn', nn.BatchNorm1d(self.flow_feat_dim))
         ]))
 
         self.T_mu_0_cond_w = nn.Sequential(OrderedDict([
             ('mu_sd1_film_w0', nn.Linear(self.latent_dim, self.flow_feat_dim, bias=False)),
             ('mu_sd1_film_w0_bn', nn.BatchNorm1d(self.flow_feat_dim)),
-            ('mu_sd1_film_w0_swish', Swish()),
+            ('mu_sd1_film_w0_swish', nn.SiLU()),
             ('mu_sd1_film_w1', nn.Linear(self.flow_feat_dim, self.flow_feat_dim, bias=True))
         ]))
 
         self.T_mu_0_cond_b = nn.Sequential(OrderedDict([
             ('mu_sd1_film_b0', nn.Linear(self.latent_dim, self.flow_feat_dim, bias=False)),
             ('mu_sd1_film_b0_bn', nn.BatchNorm1d(self.flow_feat_dim)),
-            ('mu_sd1_film_b0_swish', Swish()),
+            ('mu_sd1_film_b0_swish', nn.SiLU()),
             ('mu_sd1_film_b1', nn.Linear(self.flow_feat_dim, self.flow_feat_dim, bias=True))
         ]))
 
         self.T_mu_1 = nn.Sequential(OrderedDict([
             ('mu_sd1_relu', nn.ReLU(inplace=True)),
-            ('mu_sd2', SharedDot(self.flow_feat_dim, len(self.warp_inds), 1, bias=True))
+            ('mu_sd2', nn.Conv1d(self.flow_feat_dim, len(self.warp_inds), kernel_size=1, bias=True))
         ]))
 
         with torch.no_grad():
@@ -58,30 +58,30 @@ class CondRealNVPFlow3D(nn.Module):
             nn.init.constant_(self.T_mu_1[-1].bias.data, 0.0)
 
         self.T_logvar_0 = nn.Sequential(OrderedDict([
-            ('logvar_sd0', SharedDot(len(self.keep_inds), self.flow_feat_dim, 1)),
+            ('logvar_sd0', nn.Conv1d(len(self.keep_inds), self.flow_feat_dim, kernel_size=1)),
             ('logvar_sd0_bn', nn.BatchNorm1d(self.flow_feat_dim)),
             ('logvar_sd0_relu', nn.ReLU(inplace=True)),
-            ('logvar_sd1', SharedDot(self.flow_feat_dim, self.flow_feat_dim, 1)),
-            ('logvar_sd1_bn', nn.BatchNorm1d(self.flow_feat_dim, affine=False))
+            ('logvar_sd1', nn.Conv1d(self.flow_feat_dim, self.flow_feat_dim, kernel_size=1)),
+            ('logvar_sd1_bn', nn.BatchNorm1d(self.flow_feat_dim))
         ]))
 
         self.T_logvar_0_cond_w = nn.Sequential(OrderedDict([
             ('logvar_sd1_film_w0', nn.Linear(self.latent_dim, self.flow_feat_dim, bias=False)),
             ('logvar_sd1_film_w0_bn', nn.BatchNorm1d(self.flow_feat_dim)),
-            ('logvar_sd1_film_w0_swish', Swish()),
+            ('logvar_sd1_film_w0_swish', nn.SiLU()),
             ('logvar_sd1_film_w1', nn.Linear(self.flow_feat_dim, self.flow_feat_dim, bias=True))
         ]))
 
         self.T_logvar_0_cond_b = nn.Sequential(OrderedDict([
             ('logvar_sd1_film_b0', nn.Linear(self.latent_dim, self.flow_feat_dim, bias=False)),
             ('logvar_sd1_film_b0_bn', nn.BatchNorm1d(self.flow_feat_dim)),
-            ('logvar_sd1_film_b0_swish', Swish()),
+            ('logvar_sd1_film_b0_swish', nn.SiLU()),
             ('logvar_sd1_film_b1', nn.Linear(self.flow_feat_dim, self.flow_feat_dim, bias=True))
         ]))
 
         self.T_logvar_1 = nn.Sequential(OrderedDict([
             ('logvar_sd1_relu', nn.ReLU(inplace=True)),
-            ('logvar_sd2', SharedDot(self.flow_feat_dim, len(self.warp_inds), 1, bias=True))
+            ('logvar_sd2', nn.Conv1d(self.flow_feat_dim, len(self.warp_inds), kernel_size=1, bias=True))
         ]))
 
         with torch.no_grad():
@@ -97,12 +97,12 @@ class CondRealNVPFlow3D(nn.Module):
         mu = torch.zeros_like(p)
 
         logvar_warp = nn.functional.softsign(self.T_logvar_1(
-            torch.add(self.eps, torch.exp(self.T_logvar_0_cond_w(g).unsqueeze(2))) *
+            torch.add(self.eps, F.softplus(self.T_logvar_0_cond_w(g).unsqueeze(2))) *
             self.T_logvar_0(p[:, self.keep_inds, :].contiguous()) + self.T_logvar_0_cond_b(g).unsqueeze(2)
         ))
 
         mu_warp = self.T_mu_1(
-            torch.add(self.eps, torch.exp(self.T_mu_0_cond_w(g).unsqueeze(2))) *
+            torch.add(self.eps, F.softplus(self.T_mu_0_cond_w(g).unsqueeze(2))) *
             self.T_mu_0(p[:, self.keep_inds, :].contiguous()) + self.T_mu_0_cond_b(g).unsqueeze(2)
         )
 

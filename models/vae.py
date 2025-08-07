@@ -10,23 +10,23 @@ class VAE(nn.Module):
     def __init__(self, cfg):
         super().__init__()
 
-        self.latent_dim = cfg.model.latent_dim
+        self.latent_dim = cfg.vae.latent_dim
         self.warmup_epochs = cfg.training.warmup
         self.training_epochs = cfg.training.epochs
 
-        self.encoder = Encoder(cfg.model.input_dim, sa_blocks=getattr(cfg.model, 'sa_blocks', None))
-        self.decoder = Decoder(cfg.model)
+        self.encoder = Encoder(cfg.vae.input_dim, sa_blocks=getattr(cfg.vae, 'sa_blocks', None))
+        self.decoder = Decoder(cfg.vae)
         
-        self.anneal_kl = cfg.model.anneal_kl
-        self.max_kl_coeff = cfg.model.max_kl_coeff
-        self.min_kl_coeff = cfg.model.min_kl_coeff
-        self.constant_portion = cfg.model.constant_portion
-        self.anneal_portion = cfg.model.anneal_portion
+        self.anneal_kl = cfg.vae.anneal_kl
+        self.max_kl_coeff = cfg.vae.max_kl_coeff
+        self.min_kl_coeff = cfg.vae.min_kl_coeff
+        self.constant_portion = cfg.vae.constant_portion
+        self.anneal_portion = cfg.vae.anneal_portion
         self.total_iter = 0
 
-        self.kl_weight = cfg.model.kl_weight
+        self.kl_weight = cfg.vae.kl_weight
 
-        self.quantizer = get_quantizer(cfg, self.encoder.out_features)
+        self.quantizer = get_quantizer(cfg.vae, self.encoder.out_features)
 
     @property
     def device(self):

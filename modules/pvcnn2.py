@@ -154,7 +154,7 @@ class SharedMLP(nn.Module):
         for oc in out_channels:
             layers.append( conv(in_channels, oc, 1)) 
             layers.append(bn(8, oc))
-            layers.append(Swish()) 
+            layers.append(nn.SiLU()) 
             in_channels = oc
         self.layers = nn.Sequential(*layers)
 
@@ -212,7 +212,7 @@ class PVConv(nn.Module):
                       kernel_size, stride=1,
                       padding=kernel_size // 2), 
             nn.GroupNorm(8, out_channels),
-            Swish(),
+            nn.SiLU(),
             nn.Dropout(dropout),
             nn.Conv3d(out_channels, out_channels,
                         kernel_size, stride=1,
@@ -403,7 +403,7 @@ class PointNetSAModule(nn.Module):
 #         return self.mlp(interpolated_features), points_coords, time_emb
 
 def _linear_gn_relu(in_channels, out_channels):
-    return nn.Sequential(nn.Linear(in_channels, out_channels), nn.GroupNorm(8,out_channels), Swish())
+    return nn.Sequential(nn.Linear(in_channels, out_channels), nn.GroupNorm(8,out_channels), nn.SiLU())
 
 
 def create_mlp_components(in_channels, out_channels, classifier=False, dim=2, width_multiplier=1):
@@ -489,7 +489,7 @@ def create_pointnet2_sa_components(sa_blocks, extra_feature_channels,
             out_channels, num_blocks, voxel_resolution = conv_configs
             out_channels = int(r * out_channels)
             for p in range(num_blocks):
-                attention = ( (c+1) % 2 == 0 and use_att and p == 0 ) or (force_att and c > 0)
+                attention = ( (c) % 2 == 0 and use_att and p == 0 ) or (force_att and c > 0)
                 if voxel_resolution is None:
                     block = SharedMLP
                 else:

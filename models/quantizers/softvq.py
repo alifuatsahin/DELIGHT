@@ -7,27 +7,27 @@ from modules.pvcnn2 import PointNetSAModule
 class Quantizer(nn.Module):
     def __init__(self, cfg, input_dim):
         super().__init__()
-        self.n_e = cfg.model.soft_vq.n_e
-        self.e_dim = cfg.model.soft_vq.e_dim
+        self.n_e = cfg.soft_vq.n_e
+        self.e_dim = cfg.soft_vq.e_dim
 
-        assert cfg.model.latent_dim % self.e_dim == 0, \
-            f"latent_dim ({cfg.model.latent_dim}) must be divisible by e_dim ({self.e_dim})"
-        self.sequence_len = cfg.model.latent_dim // self.e_dim
+        assert cfg.latent_dim % self.e_dim == 0, \
+            f"latent_dim ({cfg.latent_dim}) must be divisible by e_dim ({self.e_dim})"
+        self.sequence_len = cfg.latent_dim // self.e_dim
 
-        self.num_codebooks = cfg.model.soft_vq.num_codebooks
-        self.learnable = cfg.model.soft_vq.learnable
-        self.tau_min = cfg.model.soft_vq.tau_min
-        self.tau_max = cfg.model.soft_vq.tau_max
-        self.initial_tau = cfg.model.soft_vq.tau
+        self.num_codebooks = cfg.soft_vq.num_codebooks
+        self.learnable = cfg.soft_vq.learnable
+        self.tau_min = cfg.soft_vq.tau_min
+        self.tau_max = cfg.soft_vq.tau_max
+        self.initial_tau = cfg.soft_vq.tau
         if self.learnable:
             self.log_tau = nn.Parameter(
                 torch.log(torch.tensor(self.initial_tau, dtype=torch.float32)), 
                 requires_grad=True
             )
 
-        self.entropy_loss_ratio = cfg.model.soft_vq.entropy_loss_ratio
-        self.show_usage = cfg.model.soft_vq.show_usage
-        self.l2_norm = cfg.model.soft_vq.l2_norm
+        self.entropy_loss_ratio = cfg.soft_vq.entropy_loss_ratio
+        self.show_usage = cfg.soft_vq.show_usage
+        self.l2_norm = cfg.soft_vq.l2_norm
 
         self.pre_quant_layer = PointNetSAModule(
             num_centers=self.sequence_len, 

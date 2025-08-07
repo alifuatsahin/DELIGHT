@@ -49,7 +49,7 @@ class Trainer(BaseTrainer):
         return ckpt_new
 
     def resume(self, path, eval=False):
-        ckpt = torch.load(path)
+        ckpt = torch.load(path, weights_only=True)
         ckpt = self.filter_name(ckpt)
         self.model.load_state_dict(ckpt['model'])
         if not eval:
@@ -149,6 +149,8 @@ class Trainer(BaseTrainer):
             use_ema: whether to use EMA weights
         """
         # For reconstruction evaluation, typically use current weights to measure training progress
+        if self.cfg.training.opt.ema:
+            self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
         was_training = self.model.training
         self.model.eval()
         try:
@@ -161,6 +163,8 @@ class Trainer(BaseTrainer):
         finally:
             if was_training:
                 self.model.train()
+            if self.cfg.training.opt.ema:
+                self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
 
         return samples, labels
     

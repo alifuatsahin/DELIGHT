@@ -60,7 +60,7 @@ class MLP(nn.Module):
         mu_weight_std=0.001,
         mu_bias=0.0,
         deterministic=False,
-        logvar_weight_std=0.01, 
+        logvar_weight_std=0.001, 
         logvar_bias=0.0,
     ):
         super().__init__()
@@ -75,8 +75,8 @@ class MLP(nn.Module):
             self.features = nn.Sequential()
             for i in range(n_layers):
                 self.features.add_module('mlp{}'.format(i), nn.Linear(in_features, in_features, bias=False))
-                self.features.add_module('mlp{}_bn'.format(i), nn.BatchNorm1d(in_features))
-                self.features.add_module('mlp{}_swish'.format(i), Swish())
+                self.features.add_module('mlp{}_bn'.format(i), nn.LayerNorm(in_features))
+                self.features.add_module('mlp{}_swish'.format(i), nn.SiLU())
 
         self.mus = nn.Sequential(OrderedDict([
             ('mu_mlp0', nn.Linear(in_features, out_features, bias=True))
@@ -91,7 +91,7 @@ class MLP(nn.Module):
                 ('logvar_mlp0', nn.Linear(in_features, out_features, bias=True))
             ]))
             with torch.no_grad():
-                self.logvars[-1].weight.data.fill_(logvar_weight_std)
+                self.logvars[-1].weight.data.normal_(std=logvar_weight_std)
                 nn.init.constant_(self.logvars[-1].bias.data, logvar_bias)
 
     def forward(self, input):
@@ -103,9 +103,28 @@ class MLP(nn.Module):
         if self.deterministic:
             mus = self.mus(features)
 
-            return mus, None
+            return mus, torch.zeros_like(mus)
         else:
             mus = self.mus(features)
             logvars = self.logvars(features)
 
             return mus, logvars
+        
+class StandartGaussian(nn.Module):
+    def __init__(self, out_features, mu=0.0, logvar=0.0):
+        super().__init__()
+        self.mu = mu
+        self.logvar = logvar
+        self.out_features = out_features
+
+    def sample(self):
+        std = torch.exp(0.5 * self.logvar)
+        eps = torch.randn_like(std)
+        return self.mu + eps * std
+    
+    def forward(self, features):
+        """
+        Forward pass for the StandartGaussian module.
+        """
+        out = torch.zeros(features.shape[0], self.out_features, device=features.device)
+        return out, out

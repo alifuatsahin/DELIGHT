@@ -21,29 +21,13 @@ num_node=1
 BS=32
 total_bs=$(( $NGPU * $BS ))
 
-# Base training command
-BASE_CMD="python train.py --num_gpus $NGPU"
+CHECKPOINT="../experiments/vae_softvq/airplane_bs32_20250806_140615/checkpoints/snapshot.pth"
 
-# Default configuration overrides
-DEFAULT_OPTS=(
-    "--opt"
-    "data.batch_size" "$BS"
-    "data.num_workers" "10"
-    "training.epochs" "500"
-    "training.opt.lr" "1e-4"
-    "vae.latent_dim" "1024"
-    "data.n_sample_points" "2048"
-    "data.categories" "$DATA"
-    "vae.quantizer" "softvq"
-    "training.type" "vae"
-    "vae.soft_vq.e_dim" "16"
-    "vae.soft_vq.n_e" "56"
-    "vae.soft_vq.num_codebooks" "64"
-    "vae.anneal_kl" "False"
-)
+# Base training command
+BASE_CMD="python train.py --num_gpus $NGPU --resume --pretrained $CHECKPOINT"
 
 # Combine base command with default options and any additional arguments
-FULL_CMD="$BASE_CMD ${DEFAULT_OPTS[*]} $@"
+FULL_CMD="$BASE_CMD"
 
 echo "========================================="
 echo "DELIGHT Training Script"
