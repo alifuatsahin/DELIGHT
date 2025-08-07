@@ -30,6 +30,7 @@ import os
 
 class EMA(Optimizer):
     def __init__(self, opt, ema_decay):
+        super().__init__(opt.param_groups, {})  # This sets up all internal attributes
         self.ema_decay = ema_decay
         self.apply_ema = self.ema_decay > 0.
         logger.info('[EMA] apply={}', self.apply_ema)
@@ -75,7 +76,7 @@ class EMA(Optimizer):
                 if p.grad is None:
                     continue
                 idx = params[p.shape]['idx']
-                self.optimizer.state[p]['ema'] = ema[p.shape][idx, :]
+                self.optimizer.state[p]['ema'] = ema[p.shape][idx]
                 params[p.shape]['idx'] += 1
 
         return retval

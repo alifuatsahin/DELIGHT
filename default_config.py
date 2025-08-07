@@ -84,9 +84,9 @@ cfg.training.opt.lr = 0.001
 cfg.training.opt.beta1 = 0.9
 cfg.training.opt.beta2 = 0.999
 cfg.training.opt.weight_decay = 0.01
-cfg.training.opt.ema = False
+cfg.training.opt.ema = True
 cfg.training.opt.ema_decay = 0.9999
-cfg.training.opt.scheduler = 'cosine_anneal'
+cfg.training.opt.scheduler = 'step' # 'exponential', 'step', 'linear', 'lambda', 'cosine_anneal_nocycle' 'cosine_anneal'
 
 cfg.vis = CN()
 cfg.vis.log_freq = -1

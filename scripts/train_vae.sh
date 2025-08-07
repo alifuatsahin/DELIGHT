@@ -29,7 +29,7 @@ DEFAULT_OPTS=(
     "--opt"
     "data.batch_size" "$BS"
     "data.num_workers" "10"
-    "training.epochs" "300"
+    "training.epochs" "500"
     "training.opt.lr" "1e-3"
     "model.latent_dim" "1024"
     "data.n_sample_points" "2048"

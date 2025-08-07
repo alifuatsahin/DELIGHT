@@ -68,6 +68,50 @@ class LinearAttention(nn.Module):
         out = out.squeeze(-1) # B,C,N,1 -> B,C,N
         return out 
     
+class GateLinearAttentionNoSilu(nn.Module):
+
+    def __init__(self, dim, num_heads=4, hidden_dim=4*32):
+        super().__init__()
+        self.dim = dim
+        self.num_heads = num_heads
+        self.hidden_dim = hidden_dim
+        self.head_dim = hidden_dim // num_heads
+        self.scale = self.head_dim ** (-0.5)
+        self.qkvo = nn.Conv2d(dim, hidden_dim * 4, 1)
+        self.elu = nn.ELU()
+        self.proj = nn.Conv2d(hidden_dim, dim, 1)
+
+    def forward(self, x: torch.Tensor):
+        '''
+            x: (B, C, N), C=num-channels, N=num-points
+        Returns:
+            out: torch.tensor (B, C, N)
+        '''
+        x = x.unsqueeze(-1)  # add w dimension
+        B, C, H, W = x.shape
+        qkvo = self.qkvo(x) #(b 3*c h w)
+        qkv = qkvo[:, :3*self.hidden_dim, :, :]
+        o = qkvo[:, 3*self.hidden_dim:, :, :]
+
+        q, k, v = rearrange(qkv, 'b (m n d) h w -> m b n (h w) d', m=3, n=self.num_heads) # (b n (h w) d)
+
+        q = self.elu(q) + 1.0
+        k = self.elu(k) + 1.0 # (b n l d)
+
+        q_mean = q.mean(dim=-2, keepdim=True) # (b n 1 d)
+        eff = self.scale * q_mean @ k.transpose(-1, -2) # (b n 1 l)
+        eff = torch.softmax(eff, dim=-1).transpose(-1, -2) # (b n l 1)
+        k = k * eff * (H*W)
+
+        z = 1 / (q @ k.mean(dim=-2, keepdim=True).transpose(-2, -1) + 1e-6) # (b n l 1)
+        kv = (k.transpose(-2, -1) * ((H*W) ** -0.5)) @ (v * ((H*W) ** -0.5)) # (b n d d)
+
+        res = q @ kv * z # (b n l d)
+        res = rearrange(res, 'b n (h w) d -> b (n d) h w', h=H, w=W)
+        out = self.proj(res * o)
+        out = out.squeeze(-1)  # B, C, N, 1 -> B, C, N
+        return out
+
 
 class BallQuery(nn.Module):
     def __init__(self, radius, num_neighbors, include_coordinates=True):
@@ -187,7 +231,8 @@ class PVConv(nn.Module):
             voxel_layers.append(SE3d(out_channels))
         self.voxel_layers = nn.Sequential(*voxel_layers)
         if attention:
-            self.attn = LinearAttention(out_channels, verbose=verbose)
+            # self.attn = LinearAttention(out_channels, verbose=verbose)
+            self.attn = GateLinearAttentionNoSilu(out_channels)
         else:
             self.attn = None
         if add_point_feat:
@@ -452,7 +497,7 @@ def create_pointnet2_sa_components(sa_blocks, extra_feature_channels,
             out_channels, num_blocks, voxel_resolution = conv_configs
             out_channels = int(r * out_channels)
             for p in range(num_blocks):
-                attention = ( (c+1) % 2 == 0 and use_att and p == 0 ) or (force_att and c > 0)
+                attention = ( (c) % 2 == 0 and use_att and p == 0 ) or (force_att and c > 0)
                 if voxel_resolution is None:
                     block = SharedMLP
                 else:
