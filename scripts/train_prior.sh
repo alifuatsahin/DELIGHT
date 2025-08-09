@@ -15,14 +15,14 @@ export TF_CPP_MIN_LOG_LEVEL=3
 export TF_ENABLE_ONEDNN_OPTS=0
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
-DATA="airplane" # Default category, can be overridden by command line argument
+CKPT="../experiments/vae_softvq/airplane_bs32_20250805_215648/checkpoints/snapshot.pth"
 NGPU=2 # 
 num_node=1
 BS=32
 total_bs=$(( $NGPU * $BS ))
 
 # Base training command
-BASE_CMD="python train.py --num_gpus $NGPU"
+BASE_CMD="python train.py --num_gpus $NGPU --vae_checkpoint $CKPT"
 
 # Default configuration overrides
 DEFAULT_OPTS=(
@@ -31,17 +31,10 @@ DEFAULT_OPTS=(
     "data.num_workers" "10"
     "training.epochs" "500"
     "training.opt.lr" "1e-4"
-    "vae.latent_dim" "1024"
-    "data.n_sample_points" "2048"
-    "data.categories" "$DATA"
-    "vae.quantizer" "softvq"
-    "training.type" "vae"
-    "vae.softvq.e_dim" "16"
-    "vae.softvq.n_e" "56"
-    "vae.softvq.num_codebooks" "64"
-    "vae.anneal_kl" "False"
-    "vae.point_prior_n_layers" "0"
-    "vae.softvq.l2_norm" "True"
+    "training.type" "ddpm"
+    "ddpm.loss_type" "l2"  # Loss type for training ('l1', 'l2')
+    "ddpm.beta_schedule" "linear"  # Beta schedule for diffusion process ('linear', 'cosine', 'sqrt_linear', 'sqrt')
+    "ddpm.use_xformers_attention" "True"
 )
 
 # Combine base command with default options and any additional arguments
@@ -51,7 +44,7 @@ echo "========================================="
 echo "DELIGHT Training Script"
 echo "========================================="
 echo "Number of GPUs: $NGPU"
-echo "Category: $DATA"
+echo "VAE: $CKPT"
 echo "Batch size per GPU: $BS"
 echo "Total batch size: $total_bs"
 echo "Number of nodes: $num_node"

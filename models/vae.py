@@ -46,6 +46,23 @@ class VAE(nn.Module):
         latent, entropy_loss, info = self.quantizer(encoded_features, xyz=xyz)
 
         return latent, entropy_loss, info
+    
+    @torch.no_grad()
+    def decode(self, latent, n_sampled_points=2048):
+        """
+        Decode the latent representation into point clouds. Forward pass through the flow (inference mode).
+        
+        Args:
+            latent: latent representation (B, latent_dim)
+            n_sampled_points: number of points per generated cloud (optional)
+        
+        Returns:
+            samples: decoded point clouds (B, 3, N)
+            labels: labels for the generated point clouds
+        """
+        samples, labels = self.decoder.decode(latent, n_sampled_points=n_sampled_points)
+
+        return samples, labels
 
     @torch.no_grad()
     def recont(self, pc):
@@ -69,7 +86,7 @@ class VAE(nn.Module):
         
         return samples, labels
     
-    
+    @torch.no_grad()
     def sample(self, n_sampled_points, n_samples=1):
         """
         Generate new point clouds by sampling from the prior.

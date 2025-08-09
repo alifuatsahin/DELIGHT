@@ -54,6 +54,7 @@ class Trainer(BaseTrainer):
         self.model.load_state_dict(ckpt['model'])
         if not eval:
             self.optimizer.load_state_dict(ckpt['optimizer'])
+            self.grad_scalar.load_state_dict(ckpt['grad_scalar'])
             self.start_epoch = ckpt['epoch'] + 1
             self.step = ckpt['step']
         

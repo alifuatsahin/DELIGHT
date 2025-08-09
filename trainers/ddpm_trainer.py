@@ -1,7 +1,5 @@
-from models import VAE
+from models import VAE, DDPM
 from .base_trainer import BaseTrainer
-from latent_diffusion.ldm.models.diffusion.ddpm import LatentDiffusion
-from models.ddpm import DDPM
 
 import torch
 import torch.nn as nn
@@ -38,54 +36,61 @@ class Trainer(BaseTrainer):
 
         logger.info('done init trainer @{}', self.device)
 
-    def save(self, save_name=None, epoch=None, step=None, save_dir=None):
-        grad_scalar = self.grad_scalar
-        content = {'epoch': epoch, 'global_step': step, 
-                   'grad_scalar': grad_scalar.state_dict(),
-                   'ddpm_state_dict': self.model.state_dict(), 'ddpm_optimizer': self.optimizer.state_dict(),
-                   'ddpm_scheduler': self.scheduler.state_dict(), 'vae_state_dict': self.vae.state_dict(),
-                   }
-        save_name = f"epoch_{epoch}_iters_{step}.pt" if save_name is None else save_name
-        if save_dir is None:
-            save_dir = self.cfg.save_dir
-        path = os.path.join(save_dir, "checkpoints", save_name)
-        if not os.path.exists(os.path.dirname(path)):
-            os.makedirs(os.path.dirname(path))
-        logger.info('Save model to: {}', path)
-        torch.save(content, path)
-        
-        return path
+    def filter_name(self, ckpt):
+        ckpt_new = {}
+        for k, v in ckpt.items():
+            if k[:7] == 'module.':
+                kn = k[7:]
+            elif k[:13] == 'model.module.':
+                kn = k[13:]
+            else:
+                kn = k
+            ckpt_new[kn] = v
+        return ckpt_new
 
     def resume(self, path, eval=False):
-        checkpoint = torch.load(path, map_location='cpu')
-        self.start_epoch = checkpoint['epoch']
-        self.model.load_state_dict(checkpoint['ddpm_state_dict'])
+        ckpt = torch.load(path, weights_only=True)
+        ckpt = self.filter_name(ckpt)
+        self.model.load_state_dict(ckpt['model'])
+        self.vae.load_state_dict(ckpt['vae'])
+        if not eval:
+            self.optimizer.load_state_dict(ckpt['optimizer'])
+            self.grad_scalar.load_state_dict(ckpt['grad_scalar'])
+            self.start_epoch = ckpt['epoch'] + 1
+            self.step = ckpt['step']
+        
+        logger.info(f"Resumed from {path}")
 
-        # load dae
-        self.model = self.model.to(self.device)
-        self.optimizer.load_state_dict(checkpoint['ddpm_optimizer'])
-        self.scheduler.load_state_dict(checkpoint['ddpm_scheduler'])
+    def save(self, epoch=None, step=None, save_dir=None, save_name=None):
+        data = {
+            'optimizer': self.optimizer.state_dict(),
+            'vae': self.vae.state_dict(),
+            'model': self.model.state_dict(),
+            'grad_scalar': self.grad_scalar.state_dict(),
+            'epoch': epoch,
+            'step': step,
+        }
+        save_dir = self.cfg.save_dir if save_dir is None else save_dir
+        save_name = "epoch_%s_iters_%s.pt" % (epoch, step) if save_name is None else save_name
+        path = os.path.join(save_dir, "checkpoints", save_name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        logger.info(f"Saving checkpoint to {path}")
+        torch.save(data, path)
 
-        # load vae
-        self.vae.load_state_dict(checkpoint['vae_state_dict'])
-        self.vae = self.vae.to(self.device)
-
-        # need to comment if load regular vae from voxel2input_ada trainer
-        self.grad_scalar.load_state_dict(checkpoint['grad_scalar'])
-        self.step = checkpoint['global_step']
-
-        logger.info('Resumed from : {}, epoch={}', path, self.start_epoch)
+        return path
 
     def build_model(self):
         cfg, args = self.cfg, self.args
+
+        assert args.vae_checkpoint is not None, "VAE checkpoint must be provided for DDPM training"
 
         if args.distributed:
             dist.barrier()
 
         self.vae = VAE(cfg).eval().to(self.device)  # Use eval mode for VAE during training
-        self.vae.load_state_dict(torch.load(cfg.vae_checkpoint, map_location=self.device)["model"], strict=True)
+        self.vae.load_state_dict(torch.load(args.vae_checkpoint, map_location=self.device)["model"], strict=True)
 
-        self.model = DDPM(cfg.ddpm, quantizer=cfg.vae.quantizer, ch=cfg.vae.soft_vq.e_dim).to(self.device)
+        self.model = DDPM(cfg).to(self.device)
         
         if args.distributed:
             self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[args.local_rank], output_device=args.local_rank)
@@ -99,10 +104,11 @@ class Trainer(BaseTrainer):
         self.optimizer.zero_grad()
 
         tr_pts = batch['cloud'].to(self.device)  # (B, Npoints, 3)
+        with torch.no_grad():
+            latent, _, _ = self.vae.encode(tr_pts)
 
         with autocast(self.device, enabled=True):
-            latent, _, _ = self.vae.encode(tr_pts)
-            loss = self.model(latent, None)
+            loss = self.model(latent)
 
             lossv = loss.detach().cpu().item()
 
@@ -123,43 +129,26 @@ class Trainer(BaseTrainer):
         # Use EMA weights if available
         if self.cfg.training.opt.ema:
             self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
-        
+
+        was_training = self.model.training
+        if was_training:
+            self.model.eval()
+
         try:
-            # Generate seeds if not provided
-            seeds = range(n_samples)
-            
-            # Create latent shape based on UNet backbone
-            latent_dim = self.cfg.vae.latent_dim  # 128
-            latent_shape = (latent_dim,)  # Fallback
-            
-            # Generate initial noise
-            x_T = torch.stack([torch.randn(latent_shape, generator=torch.Generator().manual_seed(seed)) 
-                              for seed in seeds], dim=0).to(self.device)
-            
             # Sample latents using diffusion model
-            latents = self.model.p_sample_loop(None, shape=(n_samples, *latent_shape), x_T=x_T, verbose=False)
-            
-            # Ensure latents are in correct shape for VAE decoder [B, latent_dim]
-            if latents.dim() > 2:
-                latents = latents.squeeze()  # Remove extra dimensions if needed
+            latents = self.model.sample(batch_size=n_samples)
             
             # Decode the latents using the VAE
-            with torch.no_grad():
-                samples, labels = self.vae.decoder.decode(latents, n_sampled_points=n_sampled_points)
-                
+            samples, labels = self.vae.decode(latents, n_sampled_points=n_sampled_points)
+
         finally:
+            if was_training:
+                self.model.train()
             # Always restore original parameters
             if self.cfg.training.opt.ema:
                 self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
 
         return samples, labels
-    
-    def ldm_sampling(model, batch_size, cond=None, verbose=False, seeds=None, latent_dim=1024):
-        latent_shape = (latent_dim,)
-        if seeds is None:
-            seeds = range(batch_size)
-        x_T = torch.stack([torch.randn(latent_shape, generator=torch.Generator().manual_seed(seed)) for seed in seeds], dim=0).to(model.device)
-        return model.p_sample_loop(cond, shape=(batch_size, *latent_shape), x_T=x_T, verbose=verbose)
 
     @torch.no_grad()
     def eval(self, x):
@@ -167,10 +156,15 @@ class Trainer(BaseTrainer):
         # Use EMA weights if available
         if self.cfg.training.opt.ema:
             self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
+        was_training = self.model.training
+        if was_training:
+            self.model.eval()
         
         try:
             samples, labels = self.vae.recont(x)
         finally:
+            if was_training:
+                self.model.train()
             # Always restore original parameters
             if self.cfg.training.opt.ema:
                 self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)

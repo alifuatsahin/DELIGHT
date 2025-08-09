@@ -7,31 +7,31 @@ from modules.pvcnn2 import PointNetSAModule
 class Quantizer(nn.Module):
     def __init__(self, cfg, input_dim):
         super().__init__()
-        self.n_e = cfg.soft_vq.n_e
-        self.e_dim = cfg.soft_vq.e_dim
+        self.n_e = cfg.softvq.n_e
+        self.e_dim = cfg.softvq.e_dim
 
         assert cfg.latent_dim % self.e_dim == 0, \
             f"latent_dim ({cfg.latent_dim}) must be divisible by e_dim ({self.e_dim})"
         self.sequence_len = cfg.latent_dim // self.e_dim
 
-        self.num_codebooks = cfg.soft_vq.num_codebooks
-        self.learnable = cfg.soft_vq.learnable
-        self.tau_min = cfg.soft_vq.tau_min
-        self.tau_max = cfg.soft_vq.tau_max
-        self.initial_tau = cfg.soft_vq.tau
+        self.num_codebooks = cfg.softvq.num_codebooks
+        self.learnable = cfg.softvq.learnable
+        self.tau_min = cfg.softvq.tau_min
+        self.tau_max = cfg.softvq.tau_max
+        self.initial_tau = cfg.softvq.tau
         if self.learnable:
             self.log_tau = nn.Parameter(
                 torch.log(torch.tensor(self.initial_tau, dtype=torch.float32)), 
                 requires_grad=True
             )
 
-        self.entropy_loss_ratio = cfg.soft_vq.entropy_loss_ratio
-        self.show_usage = cfg.soft_vq.show_usage
-        self.l2_norm = cfg.soft_vq.l2_norm
+        self.entropy_loss_ratio = cfg.softvq.entropy_loss_ratio
+        self.show_usage = cfg.softvq.show_usage
+        self.l2_norm = cfg.softvq.l2_norm
 
         self.pre_quant_layer = PointNetSAModule(
             num_centers=self.sequence_len, 
-            radius=0.2, 
+            radius=0.15, 
             num_neighbors=32, 
             in_channels=input_dim, 
             out_channels=[self.e_dim]
@@ -157,7 +157,7 @@ class Quantizer(nn.Module):
             "min_codebook_usage": min_usage,
         }
 
-        return z_q.view(z.size(0), -1), entropy_loss, info
+        return z_q, entropy_loss, info
 
     def compute_entropy_loss(self, affinity, tau=None):
         if tau is None:

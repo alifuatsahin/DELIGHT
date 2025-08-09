@@ -7,7 +7,7 @@ from typing import List, Tuple, Optional, Dict, Any
 from collections import OrderedDict
 
 from modules.flows import CondRealNVPFlow3DTriple
-from modules.layers import MLP
+from modules.layers import MLP, StandartGaussian
 from modules.fre_loss import fre_loss
     
 class WeightsMLP(nn.Module):
@@ -133,18 +133,23 @@ class Decoder(nn.Module):
             out_bias=0.0
         )
 
-        # Prior network for initial point generation
-        self.point_prior = MLP(
-            n_layers=cfg.point_prior_n_layers,
-            in_features=self.latent_dim,
-            out_features=cfg.input_dim,
-            mu_weight_std=0.001,
-            mu_bias=0.0,
-            deterministic=False,
-            logvar_weight_std=0.01,
-            logvar_bias=0.0
-        )
-        
+        if cfg.point_prior_n_layers > 0:
+            # Prior network for initial point generation
+            self.point_prior = MLP(
+                n_layers=cfg.point_prior_n_layers,
+                in_features=self.latent_dim,
+                out_features=cfg.input_dim,
+                mu_weight_std=0.001,
+                mu_bias=0.0,
+                deterministic=True,
+                logvar_weight_std=0.01,
+                logvar_bias=0.0
+            )
+        else:
+            self.point_prior = StandartGaussian(
+                out_features=cfg.input_dim
+            )
+
         # Initialize parameters
         self._initialize_parameters()
         
@@ -271,7 +276,9 @@ class Decoder(nn.Module):
             - labels: flow assignment labels (B, n_sampled_points)  
             - mixture_weights_logits: mixture weights (B, n_flows)
         """
-        assert len(latents.shape) == 2, f"Latents should be (B, D), got {latents.shape}"
+        if latents.dim() > 2: # Handle case where latents are (B, D, N)
+            latents = latents.view(latents.size(0), -1)
+
         batch_size = latents.shape[0]
         device = latents.device
 
@@ -363,6 +370,9 @@ class Decoder(nn.Module):
             - flow_outputs: list of dicts with flow statistics
             - mixture_weights_logits: mixture weights (B, n_flows)
         """
+        if g.dim() > 2: # Handle case where latents are (B, D, N)
+            g = g.view(g.size(0), -1)
+
         batch_size = g.shape[0]
         mixture_weights_logits = self.get_weights(g, warmup=warmup)
         mixture_weights = torch.exp(mixture_weights_logits)

@@ -90,6 +90,8 @@ def get_args():
                         help='Address of the master node for distributed training')
     parser.add_argument('--ntest', type=int, default=100,
                         help='Number of test samples for evaluation')
+    parser.add_argument('--vae_checkpoint', type=str, default=None,
+                        help='Path to the VAE checkpoint for DDPM training')
 
     args = parser.parse_args()
 

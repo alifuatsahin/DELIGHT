@@ -103,7 +103,7 @@ class MLP(nn.Module):
         if self.deterministic:
             mus = self.mus(features)
 
-            return mus, None
+            return mus, torch.zeros_like(mus)
         else:
             mus = self.mus(features)
             logvars = self.logvars(features)

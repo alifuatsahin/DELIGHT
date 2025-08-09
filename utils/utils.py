@@ -35,7 +35,6 @@ class Writer:
     def add_image(self, *args, **kwargs):
         if self.rank == 0 and self.writer is not None:
             self.writer.add_image(*args, **kwargs)
-            # Remove flush() - TensorBoard handles this automatically
 
     def add_histogram(self, *args, **kwargs):
         if self.rank == 0 and self.writer is not None:

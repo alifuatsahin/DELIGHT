@@ -6,17 +6,7 @@ class Quantizer(nn.Module):
         super().__init__()
 
         self.latent_dim = cfg.latent_dim
-
         self.pre_quant_layer = nn.Linear(input_dim, self.latent_dim * 2)
-
-        with torch.no_grad():
-            # Initialize mu part (first half) with small std
-            self.pre_quant_layer.weight.data[:self.latent_dim].normal_(std=0.0033)
-            self.pre_quant_layer.bias.data[:self.latent_dim].fill_(0.0)
-
-            # Initialize logvar part (second half) with different std
-            self.pre_quant_layer.weight.data[self.latent_dim:].normal_(std=0.033)
-            self.pre_quant_layer.bias.data[self.latent_dim:].fill_(0.0)
 
     @staticmethod
     def reparameterize(mean, logvar):

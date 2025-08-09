@@ -11,9 +11,7 @@ from datasets.dataset import get_data_loaders
 from utils.utils import AverageMeter
 from utils.vis_helper import visualize_point_clouds_3d
 from utils.data_helper import normalize_point_clouds
-from utils.eval_helper import compute_NLL_metric, get_ref_num
-from utils.eval_metrics import compute_all_metrics, jsd_between_point_cloud_sets
-
+from utils.eval_helper import compute_NLL_metric, get_ref_num, compute_score
 
 class BaseTrainer(ABC):
     def __init__(self, cfg, args):
@@ -176,6 +174,12 @@ class BaseTrainer(ABC):
             logger.info(f'Best eval score: {self.best_eval_score * 1e2:.3f}x1e-2 at epoch {self.best_eval_epoch}')
             self.writer.close() if hasattr(self, 'writer') else None
 
+        if self.cfg.training.type == 'ddpm':
+            logger.info('Starting evaluation of generation...')
+            self.model.eval()
+            self.eval_sample(step)
+            logger.info('Evaluation of generation completed.')
+
     @torch.no_grad()
     def vis_recont(self, batch, writer=None, step=None):
         """ Visualize reconstruction results """
@@ -243,9 +247,6 @@ class BaseTrainer(ABC):
     # -- shared method for all model with vae component -- #
     @torch.no_grad()
     def eval_nll(self, step=None):
-        if self.cfg.training.opt.ema:
-            self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
-
         device = self.device
 
         gen_pcs, ref_pcs, label_pcs = [], [], []
@@ -303,8 +304,6 @@ class BaseTrainer(ABC):
             if 'CD' in n:
                 score = v
 
-        if self.cfg.training.opt.ema:
-            self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
         return score
     
     @torch.no_grad()
@@ -382,17 +381,22 @@ class BaseTrainer(ABC):
         # Concatenate all samples and normalization data
         gen_pcs = torch.cat(gen_pcs, dim=0)[:num_samples]
         ref_pcs = torch.cat(ref_pcs, dim=0)[:num_samples]
+        labels_list = torch.cat(labels_list, dim=0)[:num_samples]
         ref_mean_pcs = torch.cat(ref_mean_pcs, dim=0)[:num_samples]
         ref_std_pcs = torch.cat(ref_std_pcs, dim=0)[:num_samples]
         
         # Handle distributed training
         if self.args.distributed:
             gen_pcs = gen_pcs.to(device)
+            labels_list = labels_list.to(device)
             logger.info(f'Before gather: {gen_pcs.shape}, rank={self.args.global_rank}')
             
             gen_pcs_list = [torch.zeros_like(gen_pcs) for _ in range(self.args.global_size)]
+            labels_list_gathered = [torch.zeros_like(labels_list) for _ in range(self.args.global_size)]
             dist.all_gather(gen_pcs_list, gen_pcs)
+            dist.all_gather(labels_list_gathered, labels_list)
             gen_pcs = torch.cat(gen_pcs_list, dim=0).cpu()
+            labels_list = torch.cat(labels_list_gathered, dim=0).cpu()
             
             logger.info(f'After gather: {gen_pcs.shape}, rank={self.args.global_rank}')
         
@@ -439,17 +443,13 @@ class BaseTrainer(ABC):
             logger.info(f'Computing metrics for category: {category}')
             
             # Compute comprehensive metrics like compute_score does
-            category_results = compute_all_metrics(
+            category_results = compute_score(
                 gen_pcs[:, :, :3].to(device).float(), 
                 ref_pcs[:, :, :3].to(device).float(), 
                 batch_size=min(50, batch_size_test),
-                accelerated_cd=True
+                accelerated_cd=True, device_str=self.device_str,
+                visualize=True, writer=writer,
             )
-            
-            # Add JSD metric like compute_score does
-            jsd = jsd_between_point_cloud_sets(
-                gen_pcs.cpu().numpy(), ref_pcs.cpu().numpy())
-            category_results['jsd'] = jsd
             
             results[category] = category_results
             
