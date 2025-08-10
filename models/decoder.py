@@ -141,7 +141,7 @@ class Decoder(nn.Module):
                 out_features=cfg.input_dim,
                 mu_weight_std=0.001,
                 mu_bias=0.0,
-                deterministic=True,
+                deterministic=False,
                 logvar_weight_std=0.01,
                 logvar_bias=0.0
             )
@@ -391,8 +391,8 @@ class Decoder(nn.Module):
             flow_out = {}
             
             # Get prior parameters
-            p_prior_mus, p_prior_logvars = self.point_prior(g)
-            
+            p_prior_mus, p_prior_logvars = self.point_prior(g, warmup=warmup)
+
             # Expand prior parameters to match point dimensions
             flow_out['p_prior_mus'] = [
                 p_prior_mus.unsqueeze(2).expand(

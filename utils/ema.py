@@ -20,105 +20,93 @@ copied and modified from
     https://github.com/NVlabs/LSGM/blob/5eae2f385c014f2250c3130152b6be711f6a3a5a/util/ema.py
 """
 
-import warnings
-import torch
 from torch.optim import Optimizer
-from loguru import logger
-import torch.nn as nn
-import os
 
 
 class EMA(Optimizer):
-    def __init__(self, opt, ema_decay):
-        super().__init__(opt.param_groups, {})  # This sets up all internal attributes
+    def __init__(self, optimizer: Optimizer, ema_decay=0.999):
+        super().__init__(optimizer.param_groups, {})  # This sets up all internal attributes
+        assert 0.0 < ema_decay <= 1.0, "EMA decay must be in (0, 1]"
+        self.optimizer = optimizer
         self.ema_decay = ema_decay
-        self.apply_ema = self.ema_decay > 0.
-        logger.info('[EMA] apply={}', self.apply_ema)
-        self.optimizer = opt
-        self.state = opt.state
-        self.param_groups = opt.param_groups
+        self.num_updates = 0
+        self.ema_weights = {}
+        self.backup_weights = {}
+
+        # Initialize EMA weights from optimizer parameters
+        for group in optimizer.param_groups:
+            for p in group['params']:
+                if p.requires_grad:
+                    self.ema_weights[id(p)] = p.data.clone()
+
+    def step(self, *args, **kwargs):
+        """Performs an optimizer step and then updates EMA weights."""
+        loss = self.optimizer.step(*args, **kwargs)
+
+        decay = min(self.ema_decay, (1 + self.num_updates) / (10 + self.num_updates))
+        self.num_updates += 1
+
+        for group in self.optimizer.param_groups:
+            for p in group['params']:
+                if p.requires_grad:
+                    if id(p) not in self.ema_weights:
+                        self.ema_weights[id(p)] = p.data.clone()
+                    else:
+                        self.ema_weights[id(p)].mul_(decay).add_(
+                            p.data, alpha=1 - decay
+                        )
+        return loss
 
     def zero_grad(self):
         self.optimizer.zero_grad()
 
-    def step(self, *args, **kwargs):
-        retval = self.optimizer.step(*args, **kwargs)
-
-        # stop here if we are not applying EMA
-        if not self.apply_ema:
-            return retval
-
+    def swap_parameters_with_ema(self, store_params_in_ema=True):
+        """Swap model parameters with EMA weights (e.g., for evaluation)."""
         for group in self.optimizer.param_groups:
-            ema, params = {}, {}
-            for i, p in enumerate(group['params']):
-                if p.grad is None:
-                    continue
-                state = self.optimizer.state[p]
-
-                # State initialization
-                if 'ema' not in state:
-                    state['ema'] = p.data.clone()
-
-                if p.shape not in params:
-                    params[p.shape] = {'idx': 0, 'data': []}
-                    ema[p.shape] = []
-
-                params[p.shape]['data'].append(p.data)
-                ema[p.shape].append(state['ema'])
-
-            for i in params:
-                params[i]['data'] = torch.stack(params[i]['data'], dim=0)
-                ema[i] = torch.stack(ema[i], dim=0)
-                ema[i].mul_(self.ema_decay).add_(
-                    params[i]['data'], alpha=1. - self.ema_decay)
-
             for p in group['params']:
-                if p.grad is None:
-                    continue
-                idx = params[p.shape]['idx']
-                self.optimizer.state[p]['ema'] = ema[p.shape][idx]
-                params[p.shape]['idx'] += 1
-
-        return retval
-
-    def load_state_dict(self, state_dict):
-        super(EMA, self).load_state_dict(state_dict)
-        # load_state_dict loads the data to self.state and self.param_groups. We need to pass this data to
-        # the underlying optimizer too.
-        # logger.info('state size: {}', len(self.state))
-        self.optimizer.state = self.state
-        self.optimizer.param_groups = self.param_groups
-
-    def swap_parameters_with_ema(self, store_params_in_ema):
-        """ This function swaps parameters with their ema values. It records original parameters in the ema
-        parameters, if store_params_in_ema is true."""
-
-        # stop here if we are not applying EMA
-        if not self.apply_ema:
-            warnings.warn(
-                'swap_parameters_with_ema was called when there is no EMA weights.')
-            return
-        # logger.info('swap with ema')
-        count_no_found = 0
-        for group in self.optimizer.param_groups:
-            for i, p in enumerate(group['params']):
                 if not p.requires_grad:
-                    # logger.info('no swap for i={}, param shape={}', i, p.shape)
                     continue
-                if p not in self.optimizer.state:
-                    count_no_found += 1
-                    # logger.info('no found i={}, {}/{} p {}', i,
-                    #            count_no_found, len(group['params']), p.shape)
+                param_id = id(p)
+                
+                # Add this safety check:
+                if param_id not in self.ema_weights:
+                    # logger.warning(f"Parameter {param_id} not found in EMA weights, initializing...")
+                    self.ema_weights[param_id] = p.data.clone()
                     continue
-                # if count_no_found > 100:
-                #    logger.info('found: i={}, p={}', i, p.shape)
-                ema = self.optimizer.state[p]['ema']
+
                 if store_params_in_ema:
-                    tmp = p.data.detach()
-                    p.data = ema.detach()
-                    self.optimizer.state[p]['ema'] = tmp
+                    self.backup_weights[param_id] = p.data.clone()
+                    p.data.copy_(self.ema_weights[param_id])
                 else:
-                    p.data = ema.detach()
+                    if param_id in self.backup_weights:
+                        p.data.copy_(self.backup_weights[param_id])
+                        del self.backup_weights[param_id]
 
+    def state_dict(self):
+        """Returns both optimizer state and EMA weights."""
+        state = {
+            "optimizer": self.optimizer.state_dict(),
+            "ema_weights": {k: v.clone() for k, v in self.ema_weights.items()}
+        }
+        
+        return state
+    
 
-# adaptive_decay = min(self.ema_decay, (1 + self.num_updates) / (10 + self.num_updates))
+    def load_state_dict(self, state_dict, device=None):
+        self.optimizer.load_state_dict(state_dict["optimizer"])
+        self.ema_weights = {
+            k: v.clone().to(device) if device is not None else v.clone()
+            for k, v in state_dict["ema_weights"].items()
+        }
+
+    def get_ema_model_state_dict(self, model):
+        """Convert EMA weights to a model state dict format."""
+        ema_state_dict = {}
+        
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                param_id = id(param)
+                if param_id in self.ema_weights:
+                    ema_state_dict[name] = self.ema_weights[param_id].clone()
+        
+        return ema_state_dict

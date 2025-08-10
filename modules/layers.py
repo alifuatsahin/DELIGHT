@@ -94,21 +94,22 @@ class MLP(nn.Module):
                 self.logvars[-1].weight.data.normal_(std=logvar_weight_std)
                 nn.init.constant_(self.logvars[-1].bias.data, logvar_bias)
 
-    def forward(self, input):
-        if self.n_layers > 0:
-            features = self.features(input)
+    def forward(self, input, warmup=False):
+        features = self.features(input)
+
+        if warmup:
+            out = torch.zeros(features.shape[0], self.out_features, device=features.device)
+            return out, out
         else:
-            features = input
+            if self.deterministic:
+                mus = self.mus(features)
 
-        if self.deterministic:
-            mus = self.mus(features)
+                return mus
+            else:
+                mus = self.mus(features)
+                logvars = self.logvars(features)
 
-            return mus, torch.zeros_like(mus)
-        else:
-            mus = self.mus(features)
-            logvars = self.logvars(features)
-
-            return mus, logvars
+                return mus, logvars
         
 class StandartGaussian(nn.Module):
     def __init__(self, out_features, mu=0.0, logvar=0.0):
@@ -122,7 +123,7 @@ class StandartGaussian(nn.Module):
         eps = torch.randn_like(std)
         return self.mu + eps * std
     
-    def forward(self, features):
+    def forward(self, features, *args, **kwargs):
         """
         Forward pass for the StandartGaussian module.
         """

@@ -45,7 +45,6 @@ cfg.ddpm.conv_resample = True
 cfg.ddpm.dims = 1
 cfg.ddpm.num_classes = -1  # No class conditioning
 cfg.ddpm.use_checkpoint = False
-cfg.ddpm.use_fp16 = False
 cfg.ddpm.num_heads = 4
 cfg.ddpm.num_head_channels = -1
 cfg.ddpm.num_heads_upsample = -1

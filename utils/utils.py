@@ -103,11 +103,6 @@ def get_opt(params, cfgopt, use_ema, other_cfg=None):
                                 weight_decay=cfgopt.weight_decay)
     else:
         raise ValueError(f"Unsupported optimizer type: {cfgopt.type}")
-        
-    # Apply EMA if requested
-    if use_ema:
-        from .ema import EMA
-        optimizer = EMA(optimizer, ema_decay=cfgopt.ema_decay)
 
     # Default scheduler (constant lr)
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda x: 1.0)
@@ -185,6 +180,11 @@ def get_opt(params, cfgopt, use_ema, other_cfg=None):
 
     else:
         raise ValueError(f"Unsupported scheduler type: {scheduler_type}")
+    
+    # Apply EMA if requested
+    if use_ema:
+        from .ema import EMA
+        optimizer = EMA(optimizer, ema_decay=cfgopt.ema_decay)
 
     return optimizer, scheduler
 

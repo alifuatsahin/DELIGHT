@@ -60,7 +60,7 @@ class Quantizer(nn.Module):
             z: Input tensor.
         """
         features, _, _ = self.pre_quant_layer((features, xyz, None))  # Project input to codebook size
-        z = features.transpose(1, 2).contiguous()  # (B, e_dim, sequence_len)
+        z = features.transpose(1, 2).contiguous()  # (B, D, N) -> (B, N, D)
 
         # Handle different input shapes
         if z.dim() == 4:
@@ -157,7 +157,7 @@ class Quantizer(nn.Module):
             "min_codebook_usage": min_usage,
         }
 
-        return z_q, entropy_loss, info
+        return z_q.transpose(1, 2).contiguous(), entropy_loss, info
 
     def compute_entropy_loss(self, affinity, tau=None):
         if tau is None:

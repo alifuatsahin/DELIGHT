@@ -92,20 +92,33 @@ def get_args():
                         help='Number of test samples for evaluation')
     parser.add_argument('--vae_checkpoint', type=str, default=None,
                         help='Path to the VAE checkpoint for DDPM training')
+    parser.add_argument('--config', type=str, default=None,
+                        help='Path to the config file for training or evaluation')
 
     args = parser.parse_args()
-
-    args.trainer_path = "trainers." + config.training.type + "_trainer"
 
     if args.eval or args.resume:
         logger.info('Arguments: {}'.format(args))
         args.config = os.path.dirname(args.pretrained) + '/../config.yml'
         config.merge_from_file(args.config)
+    elif args.config is not None:
+        logger.info('Load config: {}'.format(args.config))
+        tmp_exp_name = config.exp_name
+        config.merge_from_file(args.config)
+        config.exp_name = tmp_exp_name  # keep the original exp name
+    elif args.vae_checkpoint is not None:
+        args.config = os.path.dirname(args.vae_checkpoint) + '/../config.yml'
+        logger.info('Load config from VAE: {}'.format(args.config))
+        tmp_exp_name = config.exp_name
+        config.merge_from_file(args.config)
+        config.exp_name = tmp_exp_name  # keep the original exp name
 
     if args.opt is not None:
         config.merge_from_list(args.opt)
+    
+    args.trainer_path = "trainers." + config.training.type + "_trainer"
 
-    if config.exp_name == '' or config.exp_name is None:
+    if config.exp_name == '':
         timestamp = time.strftime('%Y%m%d_%H%M%S')
         
         # Build detailed experiment name
@@ -181,7 +194,7 @@ def main_worker(local_rank, args, config):
     main(args, config)
 
 
-if __name__ == "__main__":    
+if __name__ == "__main__":
     args, config = get_args()
 
     if args.num_gpus > 1:

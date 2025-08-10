@@ -36,18 +36,6 @@ class Trainer(BaseTrainer):
 
         logger.info('done init trainer @{}', self.device)
 
-    def filter_name(self, ckpt):
-        ckpt_new = {}
-        for k, v in ckpt.items():
-            if k[:7] == 'module.':
-                kn = k[7:]
-            elif k[:13] == 'model.module.':
-                kn = k[13:]
-            else:
-                kn = k
-            ckpt_new[kn] = v
-        return ckpt_new
-
     def resume(self, path, eval=False):
         ckpt = torch.load(path, weights_only=True)
         ckpt = self.filter_name(ckpt)
@@ -88,7 +76,9 @@ class Trainer(BaseTrainer):
             dist.barrier()
 
         self.vae = VAE(cfg).eval().to(self.device)  # Use eval mode for VAE during training
-        self.vae.load_state_dict(torch.load(args.vae_checkpoint, map_location=self.device)["model"], strict=True)
+        ckpt = torch.load(args.vae_checkpoint, weights_only=True)
+        vae_ckpt = self.filter_name(ckpt['ema_model'] if 'ema_model' in ckpt.keys() else ckpt['model'])
+        self.vae.load_state_dict(vae_ckpt)
 
         self.model = DDPM(cfg).to(self.device)
         
@@ -103,12 +93,12 @@ class Trainer(BaseTrainer):
         self.model.train()
         self.optimizer.zero_grad()
 
-        tr_pts = batch['cloud'].to(self.device)  # (B, Npoints, 3)
+        tr_pts = batch['tr_points'].to(self.device)  # (B, Npoints, 3)
         with torch.no_grad():
             latent, _, _ = self.vae.encode(tr_pts)
 
-        with autocast(self.device, enabled=True):
-            loss = self.model(latent)
+        with autocast(self.device_str, enabled=True):
+            loss, logs_dict = self.model(latent)
 
             lossv = loss.detach().cpu().item()
 
@@ -116,10 +106,11 @@ class Trainer(BaseTrainer):
         self.grad_scalar.step(self.optimizer)
         self.grad_scalar.update()
 
-        # Log metrics
+        # Log metrics efficiently
         if self.writer is not None and step is not None:
-            v0 = loss.mean().detach().cpu().item() if torch.is_tensor(loss) else loss
-            self.writer.avg_meter("loss", v0, step=step)
+            for k, v in logs_dict.items():
+                v0 = v.mean().detach().cpu().item() if torch.is_tensor(v) else v
+                self.writer.avg_meter(k, v0, step=step)
 
         return lossv
 

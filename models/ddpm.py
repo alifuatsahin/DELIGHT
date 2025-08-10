@@ -146,7 +146,7 @@ class ResBlock(TimestepBlock):
             h = in_conv(h)
         else:
             h = self.in_layers(x)
-        emb_out = self.emb_layers(emb).type(h.dtype)
+        emb_out = self.emb_layers(emb)
         while len(emb_out.shape) < len(h.shape):
             emb_out = emb_out[..., None]
         if self.use_scale_shift_norm:
@@ -223,7 +223,7 @@ class QKVAttention(nn.Module):
             (q * scale).reshape(bs * self.n_heads, ch, length),
             (k * scale).reshape(bs * self.n_heads, ch, length),
         ) # More stable with f16 than dividing afterwards
-        weight = torch.softmax(weight, dim=-1).type(weight.dtype)
+        weight = torch.softmax(weight, dim=-1)
         a = torch.einsum("bts,bcs->bct", weight, v.reshape(bs * self.n_heads, ch, length))
         return a.reshape(bs, -1, length)
 
@@ -299,7 +299,6 @@ class DDPM(nn.Module):
         resblock_updown = cfg.resblock_updown
         use_xformers_attention = cfg.use_xformers_attention
 
-        self.dtype = torch.float16 if cfg.use_fp16 else torch.float32
         self.num_classes = cfg.num_classes if cfg.num_classes > 0 else None
         self.parameterization = cfg.parameterization
         self.original_elbo_weight = cfg.original_elbo_weight
@@ -316,9 +315,13 @@ class DDPM(nn.Module):
             cfg.timesteps,
         )
 
-        self.logvar = torch.full(fill_value=cfg.logvar_init, size=(self.num_timesteps,))
         if self.learn_logvar:
             self.logvar = nn.Parameter(self.logvar, requires_grad=True)
+        else:
+            self.register_buffer(
+                'logvar', 
+                torch.full(fill_value=cfg.logvar_init, size=(self.num_timesteps,))
+            )
 
         time_embed_dim = model_channels * 4
         self.time_embed = nn.Sequential(
@@ -729,7 +732,7 @@ class DDPM(nn.Module):
             assert y.shape == (x.shape[0],)
             emb = emb + self.label_emb(y)
 
-        h = x.type(self.dtype)
+        h = x
         for module in self.input_blocks:
             h = module(h, emb)
             hs.append(h)
@@ -737,7 +740,6 @@ class DDPM(nn.Module):
         for module in self.output_blocks:
             h = torch.cat([h, hs.pop()], dim=1)
             h = module(h, emb)
-        h = h.type(x.dtype)
 
         return self.out(h)
     

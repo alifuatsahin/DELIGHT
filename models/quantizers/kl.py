@@ -41,7 +41,7 @@ class Quantizer(nn.Module):
             "mean_logvars": torch.mean(log_vars, dim=0).mean(),
         }
 
-        return g_samples, kl_loss, info
+        return g_samples.unsqueeze(-1), kl_loss, info
 
     def compute_kl_loss(self, mus, logvars):
         """

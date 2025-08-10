@@ -36,22 +36,13 @@ class Trainer(BaseTrainer):
 
         logger.info('Done init trainer @{}', self.device)
 
-    def filter_name(self, ckpt):
-        ckpt_new = {}
-        for k, v in ckpt.items():
-            if k[:7] == 'module.':
-                kn = k[7:]
-            elif k[:13] == 'model.module.':
-                kn = k[13:]
-            else:
-                kn = k
-            ckpt_new[kn] = v
-        return ckpt_new
-
     def resume(self, path, eval=False):
         ckpt = torch.load(path, weights_only=True)
-        ckpt = self.filter_name(ckpt)
-        self.model.load_state_dict(ckpt['model'])
+        if self.args.distributed:
+            model_ckpt = self.add_module_prefix(ckpt['model'])
+        else:
+            model_ckpt = self.filter_name(ckpt['model'])
+        self.model.load_state_dict(model_ckpt['model'])
         if not eval:
             self.optimizer.load_state_dict(ckpt['optimizer'])
             self.grad_scalar.load_state_dict(ckpt['grad_scalar'])
@@ -68,6 +59,8 @@ class Trainer(BaseTrainer):
             'epoch': epoch,
             'step': step,
         }
+        if self.cfg.training.opt.ema:
+            data['ema_model'] = self.optimizer.get_ema_model_state_dict(self.model)
         save_dir = self.cfg.save_dir if save_dir is None else save_dir
         save_name = "epoch_%s_iters_%s.pt" % (epoch, step) if save_name is None else save_name
         path = os.path.join(save_dir, "checkpoints", save_name)

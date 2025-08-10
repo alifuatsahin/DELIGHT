@@ -15,7 +15,7 @@ export TF_CPP_MIN_LOG_LEVEL=3
 export TF_ENABLE_ONEDNN_OPTS=0
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
-CKPT="../experiments/vae_softvq/airplane_bs32_20250805_215648/checkpoints/snapshot.pth"
+CKPT="../experiments/vae_softvq/airplane_bs32_20250805_215648/checkpoints/best_eval.pth"
 NGPU=2 # 
 num_node=1
 BS=32

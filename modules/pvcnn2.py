@@ -15,6 +15,10 @@ import third_party.pvcnn.functional as F
 from torch.amp import custom_fwd, custom_bwd
 from modules.layers import Swish
 
+import xformers.ops as xops
+import math
+
+
 class SE3d(nn.Module):
     def __init__(self, channel, reduction=8):
         super().__init__()
@@ -104,6 +108,42 @@ class GateLinearAttentionNoSilu(nn.Module):
         out = out.squeeze(-1)  # B, C, N, 1 -> B, C, N
         return out
 
+class SelfAttentionBlock(nn.Module):
+    def __init__(self, dim, n_heads=4, hidden_dim=4*32):
+        super().__init__()
+        self.n_heads = n_heads
+        self.head_dim = hidden_dim // n_heads
+        assert dim % n_heads == 0, "in_channels must be divisible by n_heads"
+        self.to_qkv = nn.Conv2d(dim, hidden_dim * 3, 1)
+        self.attn = EfficientQKVAttention(n_heads)
+        self.to_out = nn.Conv2d(hidden_dim, dim, 1)
+
+    def forward(self, x):
+        # x: (B, C, N)
+        x = x.unsqueeze(-1) # add w dimensio
+        qkv = self.to_qkv(x)  # (B, 3*C, N)
+        out = self.attn(qkv)  # (B, C, N)
+        out = self.to_out(out)
+        out = out.squeeze(-1)  # B, C, N, 1 -> B, C, N
+        return out
+    
+class EfficientQKVAttention(nn.Module):
+    def __init__(self, n_heads):
+        super().__init__()
+        self.n_heads = n_heads
+
+    def forward(self, qkv):
+        B, C, H, W = qkv.shape
+        assert C % (3 * self.n_heads) == 0
+        ch = C // (3 * self.n_heads)
+        q, k, v = qkv.chunk(3, dim=1)
+        q = q.reshape(B, self.n_heads, ch, H * W).permute(0, 3, 1, 2).contiguous()  # [B, H*W, n_heads, ch]
+        k = k.reshape(B, self.n_heads, ch, H * W).permute(0, 3, 1, 2).contiguous()
+        v = v.reshape(B, self.n_heads, ch, H * W).permute(0, 3, 1, 2).contiguous()
+        scale = 1 / math.sqrt(ch)
+        y = xops.memory_efficient_attention(q, k, v, scale=scale)
+        y = y.permute(0, 2, 3, 1).reshape(B, self.n_heads * ch, H * W).unsqueeze(-1)
+        return y
 
 class BallQuery(nn.Module):
     def __init__(self, radius, num_neighbors, include_coordinates=True):
@@ -225,6 +265,7 @@ class PVConv(nn.Module):
         if attention:
             # self.attn = LinearAttention(out_channels, verbose=verbose)
             self.attn = GateLinearAttentionNoSilu(out_channels)
+            # self.attn = SelfAttentionBlock(out_channels)
         else:
             self.attn = None
         if add_point_feat:

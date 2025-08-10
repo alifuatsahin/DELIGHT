@@ -47,6 +47,30 @@ class BaseTrainer(ABC):
             for key, value in loss_dict.items():
                 writer.add_scalar(f'train/{key}', value, step)
 
+    def filter_name(self, ckpt):
+        ckpt_new = {}
+        for k, v in ckpt.items():
+            if k[:7] == 'module.':
+                kn = k[7:]
+            elif k[:13] == 'model.module.':
+                kn = k[13:]
+            else:
+                kn = k
+            ckpt_new[kn] = v
+        return ckpt_new
+
+    def add_module_prefix(state_dict):
+        """Add 'module.' prefix to every key in a state dict."""
+        state_dict_new = {}
+        for k, v in state_dict.items():
+            # Avoid double prefixing if already present
+            if not k.startswith('module.'):
+                kn = 'module.' + k
+            else:
+                kn = k
+            state_dict_new[kn] = v
+        return state_dict_new
+
     def set_writer(self, writer):
         self.writer = writer
 
