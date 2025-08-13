@@ -7,6 +7,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from modules.attention import EfficientQKVAttention, QKVAttention
+
 from utils.diffusion_helper import (
     checkpoint,
     conv_nd,
@@ -199,62 +201,6 @@ class AttentionBlock(nn.Module):
         h = self.attention(qkv)
         h = self.proj_out(h)
         return (x + h).view(b, c, *spatial)
-    
-def count_flops_attn(model, _x, y):
-    b, c, *spatial = y[0].shape
-    num_spatial = int(np.prod(spatial))
-
-    matmul_ops = 2 * b * (num_spatial ** 2) * c
-    model.total_ops += torch.DoubleTensor([matmul_ops])
-
-class QKVAttention(nn.Module):
-    def __init__(self, n_heads):
-        super().__init__()
-        self.n_heads = n_heads
-
-    def forward(self, qkv):
-        bs, width, length = qkv.shape
-        assert width % (3 * self.n_heads) == 0
-        ch = width // (3 * self.n_heads)
-        q, k, v = qkv.chunk(3, dim=1)
-        scale = 1 / math.sqrt(math.sqrt(ch))
-        weight = torch.einsum(
-            "bct,bcs->bts", 
-            (q * scale).reshape(bs * self.n_heads, ch, length),
-            (k * scale).reshape(bs * self.n_heads, ch, length),
-        ) # More stable with f16 than dividing afterwards
-        weight = torch.softmax(weight, dim=-1)
-        a = torch.einsum("bts,bcs->bct", weight, v.reshape(bs * self.n_heads, ch, length))
-        return a.reshape(bs, -1, length)
-
-    @staticmethod
-    def count_flops(model, _x, y):
-        return count_flops_attn(model, _x, y)
-        
-
-class EfficientQKVAttention(nn.Module):
-    def __init__(self, n_heads):
-        super().__init__()
-        self.n_heads = n_heads
-        import xformers.ops as xops
-        self.xops = xops
-
-    def forward(self, qkv):
-        bs, width, length = qkv.shape
-        assert width % (3 * self.n_heads) == 0
-        ch = width // (3 * self.n_heads)
-        q, k, v = qkv.chunk(3, dim=1)
-        q = q.reshape(bs, self.n_heads, ch, length).permute(0, 3, 1, 2).contiguous()  # [bs, length, n_heads, ch]
-        k = k.reshape(bs, self.n_heads, ch, length).permute(0, 3, 1, 2).contiguous()
-        v = v.reshape(bs, self.n_heads, ch, length).permute(0, 3, 1, 2).contiguous()
-        scale = 1 / math.sqrt(math.sqrt(ch))
-        y = self.xops.memory_efficient_attention(q, k, v, scale=scale)
-        y = y.permute(0, 2, 3, 1).reshape(bs, self.n_heads * ch, length)
-        return y
-    
-    @staticmethod
-    def count_flops(model, _x, y):
-        return count_flops_attn(model, _x, y)
 
 class DDPM(nn.Module):
     def __init__(

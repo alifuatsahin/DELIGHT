@@ -1,55 +1,7 @@
-import torch.nn as nn
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from collections import OrderedDict
-
-class Swish(nn.Module):
-    def __init__(self):
-        super(Swish, self).__init__()
-
-    def forward(self, x):
-        return x * torch.sigmoid(x)
-
-
-class SharedDot(nn.Module):
-    def __init__(
-        self, 
-        in_features, 
-        out_features,
-        n_channels,
-        bias=False,
-        init_weight=None, 
-        init_bias=None
-    ):
-        super().__init__()
-        self.in_features = in_features
-        self.out_features = out_features
-        self.n_channels = n_channels
-        self.init_weight = init_weight
-        self.init_bias = init_bias
-        self.weight = nn.Parameter(torch.Tensor(n_channels, out_features, in_features))
-        if bias:
-            self.bias = nn.Parameter(torch.Tensor(n_channels, out_features))
-        else:
-            self.register_parameter('bias', None)
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        if self.init_weight:
-            nn.init.uniform_(self.weight.data, a=-self.init_weight, b=self.init_weight)
-        else:
-            nn.init.kaiming_uniform_(self.weight.data, a=0.)
-        if self.bias is not None:
-            if self.init_bias:
-                nn.init.constant_(self.bias.data, self.init_bias)
-            else:
-                nn.init.constant_(self.bias.data, 0.)
-
-    def forward(self, input):
-        output = torch.matmul(self.weight, input.unsqueeze(1))
-        if self.bias is not None:
-            output.add_(self.bias.unsqueeze(0).unsqueeze(3))
-        output.squeeze_(1)
-        return output
 
 class MLP(nn.Module):
     def __init__(
@@ -128,3 +80,45 @@ class StandartGaussian(nn.Module):
         """
         out = torch.zeros(features.shape[0], self.out_features, device=features.device)
         return out, out
+    
+
+class FiLMCond(nn.Module):
+    def __init__(self, input_dim, latent_dim, feat_dim, weight_std=0.001, bias=0.0):
+        super().__init__()
+        self.cond = nn.Sequential([
+            nn.Conv1d(input_dim, feat_dim, kernel_size=1),
+            nn.BatchNorm1d(feat_dim),
+            nn.ReLU(inplace=True),
+            nn.Conv1d(feat_dim, feat_dim, kernel_size=1),
+        ])
+
+        self.gamma = nn.Sequential(OrderedDict([
+            nn.Linear(latent_dim, feat_dim, bias=False),
+            nn.BatchNorm1d(feat_dim),
+            nn.SiLU(),
+            nn.Linear(feat_dim, feat_dim, bias=True)
+        ]))
+
+        self.beta = nn.Sequential(OrderedDict([
+            nn.Linear(latent_dim, feat_dim, bias=False),
+            nn.BatchNorm1d(feat_dim),
+            nn.SiLU(),
+            nn.Linear(feat_dim, feat_dim, bias=True)
+        ]))
+
+        with torch.no_grad():
+            self.cond[-1].weight.data.normal_(std=weight_std)
+            nn.init.constant_(self.cond[-1].bias.data, bias)
+            self.gamma[-1].weight.data.normal_(std=weight_std)
+            nn.init.constant_(self.gamma[-1].bias.data, bias)
+            self.beta[-1].weight.data.normal_(std=weight_std)
+            nn.init.constant_(self.beta[-1].bias.data, bias)
+
+    def forward(self, x, context):
+        if context.dim() > 2:
+            context = context.view(context.size(0), -1).contiguous()
+
+        g = torch.add(F.softplus(self.gamma(context).unsqueeze(-1)), 1e-6)  # Ensure gamma is positive
+        b = self.beta(context).unsqueeze(-1)
+        out = g * self.cond(x) + b
+        return out

@@ -4,20 +4,13 @@ copied and modified from source:
     and functions under 
     https://github.com/alexzhou907/PVD/tree/9747265a5f141e5546fd4f862bfa66aa59f1bd33/modules 
 """
-import copy
 import functools
-from loguru import logger
-from einops import rearrange
 import torch.nn as nn
 import torch
-import numpy as np
 import third_party.pvcnn.functional as F
 from torch.amp import custom_fwd, custom_bwd
-from modules.layers import Swish
 
-import xformers.ops as xops
-import math
-
+from .attention import SelfAttention
 
 class SE3d(nn.Module):
     def __init__(self, channel, reduction=8):
@@ -33,117 +26,6 @@ class SE3d(nn.Module):
         return f"SE({self.channel}, {self.channel})" 
     def forward(self, inputs):
         return inputs * self.fc(inputs.mean(-1).mean(-1).mean(-1)).view(inputs.shape[0], inputs.shape[1], 1, 1, 1)
-
-class LinearAttention(nn.Module): 
-    """
-    copied and modified from https://github.com/lucidrains/denoising-diffusion-pytorch/blob/7706bdfc6f527f58d33f84b7b522e61e6e3164b3/denoising_diffusion_pytorch/denoising_diffusion_pytorch.py#L159 
-    """
-    def __init__(self, dim, heads = 4, hidden_dim=4*32, verbose=True): 
-        super().__init__()
-        self.heads = heads
-        dim_head = hidden_dim // heads
-        self.to_qkv = nn.Conv2d(dim, hidden_dim * 3, 1, bias = False)
-        self.to_out = nn.Conv2d(hidden_dim, dim, 1) 
-
-    def forward(self, x):
-        '''
-        Args:
-            x: torch.tensor (B,C,N), C=num-channels, N=num-points 
-        Returns:
-            out: torch.tensor (B,C,N)
-        '''
-        x = x.unsqueeze(-1) # add w dimension
-        b, c, h, w = x.shape
-        qkv = self.to_qkv(x)
-        q, k, v = rearrange(qkv, 'b (qkv heads c) h w -> qkv b heads c (h w)', heads = self.heads, qkv=3)
-        k = k.softmax(dim=-1)
-        context = torch.einsum('bhdn,bhen->bhde', k, v)
-        out = torch.einsum('bhde,bhdn->bhen', context, q)
-        out = rearrange(out, 'b heads c (h w) -> b (heads c) h w', heads=self.heads, h=h, w=w)
-        out = self.to_out(out)
-        out = out.squeeze(-1) # B,C,N,1 -> B,C,N
-        return out 
-
-class GateLinearAttentionNoSilu(nn.Module):
-
-    def __init__(self, dim, num_heads=4, hidden_dim=4*32):
-        super().__init__()
-        self.dim = dim
-        self.num_heads = num_heads
-        self.hidden_dim = hidden_dim
-        self.head_dim = hidden_dim // num_heads
-        self.scale = self.head_dim ** (-0.5)
-        self.qkvo = nn.Conv2d(dim, hidden_dim * 4, 1)
-        self.elu = nn.ELU()
-        self.proj = nn.Conv2d(hidden_dim, dim, 1)
-
-    def forward(self, x: torch.Tensor):
-        '''
-            x: (B, C, N), C=num-channels, N=num-points
-        Returns:
-            out: torch.tensor (B, C, N)
-        '''
-        x = x.unsqueeze(-1)  # add w dimension
-        B, C, H, W = x.shape
-        qkvo = self.qkvo(x) #(b 3*c h w)
-        qkv = qkvo[:, :3*self.hidden_dim, :, :]
-        o = qkvo[:, 3*self.hidden_dim:, :, :]
-
-        q, k, v = rearrange(qkv, 'b (m n d) h w -> m b n (h w) d', m=3, n=self.num_heads) # (b n (h w) d)
-
-        q = self.elu(q) + 1.0
-        k = self.elu(k) + 1.0 # (b n l d)
-
-        q_mean = q.mean(dim=-2, keepdim=True) # (b n 1 d)
-        eff = self.scale * q_mean @ k.transpose(-1, -2) # (b n 1 l)
-        eff = torch.softmax(eff, dim=-1).transpose(-1, -2) # (b n l 1)
-        k = k * eff * (H*W)
-
-        z = 1 / (q @ k.mean(dim=-2, keepdim=True).transpose(-2, -1) + 1e-6) # (b n l 1)
-        kv = (k.transpose(-2, -1) * ((H*W) ** -0.5)) @ (v * ((H*W) ** -0.5)) # (b n d d)
-
-        res = q @ kv * z # (b n l d)
-        res = rearrange(res, 'b n (h w) d -> b (n d) h w', h=H, w=W)
-        out = self.proj(res * o)
-        out = out.squeeze(-1)  # B, C, N, 1 -> B, C, N
-        return out
-
-class SelfAttentionBlock(nn.Module):
-    def __init__(self, dim, n_heads=4, hidden_dim=4*32):
-        super().__init__()
-        self.n_heads = n_heads
-        self.head_dim = hidden_dim // n_heads
-        assert dim % n_heads == 0, "in_channels must be divisible by n_heads"
-        self.to_qkv = nn.Conv2d(dim, hidden_dim * 3, 1)
-        self.attn = EfficientQKVAttention(n_heads)
-        self.to_out = nn.Conv2d(hidden_dim, dim, 1)
-
-    def forward(self, x):
-        # x: (B, C, N)
-        x = x.unsqueeze(-1) # add w dimensio
-        qkv = self.to_qkv(x)  # (B, 3*C, N)
-        out = self.attn(qkv)  # (B, C, N)
-        out = self.to_out(out)
-        out = out.squeeze(-1)  # B, C, N, 1 -> B, C, N
-        return out
-    
-class EfficientQKVAttention(nn.Module):
-    def __init__(self, n_heads):
-        super().__init__()
-        self.n_heads = n_heads
-
-    def forward(self, qkv):
-        B, C, H, W = qkv.shape
-        assert C % (3 * self.n_heads) == 0
-        ch = C // (3 * self.n_heads)
-        q, k, v = qkv.chunk(3, dim=1)
-        q = q.reshape(B, self.n_heads, ch, H * W).permute(0, 3, 1, 2).contiguous()  # [B, H*W, n_heads, ch]
-        k = k.reshape(B, self.n_heads, ch, H * W).permute(0, 3, 1, 2).contiguous()
-        v = v.reshape(B, self.n_heads, ch, H * W).permute(0, 3, 1, 2).contiguous()
-        scale = 1 / math.sqrt(ch)
-        y = xops.memory_efficient_attention(q, k, v, scale=scale)
-        y = y.permute(0, 2, 3, 1).reshape(B, self.n_heads * ch, H * W).unsqueeze(-1)
-        return y
 
 class BallQuery(nn.Module):
     def __init__(self, radius, num_neighbors, include_coordinates=True):
@@ -265,7 +147,7 @@ class PVConv(nn.Module):
         if attention:
             # self.attn = LinearAttention(out_channels, verbose=verbose)
             # self.attn = GateLinearAttentionNoSilu(out_channels)
-            self.attn = SelfAttentionBlock(out_channels)
+            self.attn = SelfAttention(out_channels)
         else:
             self.attn = None
         if add_point_feat:
@@ -420,92 +302,6 @@ class PointNetSAModule(nn.Module):
     def extra_repr(self):
         return f'num_centers={self.num_centers}, out_channels={self.out_channels}'
 
-
-# class PointNetFPModule(nn.Module):
-#     def __init__(self, in_channels, out_channels):
-#         super().__init__()
-#         self.mlp = SharedMLP(in_channels=in_channels, out_channels=out_channels, dim=1)
-
-#     def forward(self, inputs):
-#         if len(inputs) == 4:
-#             points_coords, centers_coords, centers_features, time_emb = inputs
-#             points_features = None
-#         else:
-#             points_coords, centers_coords, centers_features, points_features, time_emb = inputs
-#         interpolated_features = F.nearest_neighbor_interpolate(points_coords, centers_coords, centers_features)
-#         if points_features is not None:
-#             interpolated_features = torch.cat(
-#                 [interpolated_features, points_features], dim=1
-#             )
-#         if time_emb is not None:
-#             B,D,S = time_emb.shape 
-#             N = points_coords.shape[-1]
-#             time_emb = time_emb[:,:,0:1].expand(-1,-1,N) 
-#         return self.mlp(interpolated_features), points_coords, time_emb
-
-def _linear_gn_relu(in_channels, out_channels):
-    return nn.Sequential(nn.Linear(in_channels, out_channels), nn.GroupNorm(8,out_channels), nn.SiLU())
-
-
-def create_mlp_components(in_channels, out_channels, classifier=False, dim=2, width_multiplier=1):
-    r = width_multiplier
-
-    if dim == 1:
-        block = _linear_gn_relu
-    else:
-        block = SharedMLP
-    if not isinstance(out_channels, (list, tuple)):
-        out_channels = [out_channels]
-    if len(out_channels) == 0 or (len(out_channels) == 1 and out_channels[0] is None):
-        return nn.Sequential(), in_channels, in_channels
-
-    layers = []
-    for oc in out_channels[:-1]:
-        if oc < 1:
-            layers.append(nn.Dropout(oc))
-        else:
-            oc = int(r * oc)
-            layers.append(block(in_channels, oc))
-            in_channels = oc
-    if dim == 1:
-        if classifier:
-            layers.append(nn.Linear(in_channels, out_channels[-1]))
-        else:
-            layers.append(_linear_gn_relu(in_channels, int(r * out_channels[-1])))
-    else:
-        if classifier:
-            layers.append(nn.Conv1d(in_channels, out_channels[-1], 1))
-        else:
-            layers.append(SharedMLP(in_channels, int(r * out_channels[-1])))
-    return layers, out_channels[-1] if classifier else int(r * out_channels[-1])
-
-
-# def create_pointnet_components(blocks, in_channels, embed_dim, with_se=False, normalize=True, eps=0,
-#                                width_multiplier=1, voxel_resolution_multiplier=1, verbose=True):
-#     r, vr = width_multiplier, voxel_resolution_multiplier
-
-#     layers, concat_channels = [], 0
-#     c = 0
-#     for k, (out_channels, num_blocks, voxel_resolution) in enumerate(blocks):
-#         out_channels = int(r * out_channels)
-#         for p in range(num_blocks):
-#             attention = k % 2 == 0 and k > 0 and p == 0
-#             if voxel_resolution is None:
-#                 block = SharedMLP
-#             else:
-#                 block = functools.partial(PVConv, kernel_size=3, resolution=int(vr * voxel_resolution), attention=attention,
-#                                           with_se=with_se, normalize=normalize, eps=eps, verbose=verbose)
-
-#             if c == 0:
-#                 layers.append(block(in_channels, out_channels))
-#             else:
-#                 layers.append(block(in_channels+embed_dim, out_channels))
-#             in_channels = out_channels
-#             concat_channels += out_channels
-#             c += 1
-#     return layers, in_channels, concat_channels
-
-
 def create_pointnet2_sa_components(sa_blocks, extra_feature_channels, 
         input_dim=3, 
         embed_dim=64, use_att=False, force_att=0,
@@ -575,51 +371,3 @@ def create_pointnet2_sa_components(sa_blocks, extra_feature_channels,
             sa_layers.append(nn.Sequential(*sa_blocks))
 
     return sa_layers, sa_in_channels, in_channels, 1 if num_centers is None else num_centers
-
-
-# def create_pointnet2_fp_modules(fp_blocks, in_channels, sa_in_channels, embed_dim=64, use_att=False,
-#                                 dropout=0.1, has_temb=1, 
-#                                 with_se=False, normalize=True, eps=0,
-#                                 width_multiplier=1, voxel_resolution_multiplier=1,
-#                                 verbose=True):
-#     r, vr = width_multiplier, voxel_resolution_multiplier
-
-#     fp_layers = []
-#     c = 0
-
-#     for fp_idx, (fp_configs, conv_configs) in enumerate(fp_blocks):
-#         fp_blocks = []
-#         out_channels = tuple(int(r * oc) for oc in fp_configs)
-#         fp_blocks.append(
-#             PointNetFPModule(in_channels=in_channels + sa_in_channels[-1 - fp_idx] + embed_dim*has_temb, 
-#                 out_channels=out_channels)
-#         )
-#         in_channels = out_channels[-1]
-
-#         if conv_configs is not None:
-#             out_channels, num_blocks, voxel_resolution = conv_configs
-#             out_channels = int(r * out_channels)
-#             for p in range(num_blocks):
-#                 attention = (c+1) % 2 == 0 and c < len(fp_blocks) - 1 and use_att and p == 0
-#                 if voxel_resolution is None:
-#                     block = SharedMLP
-#                 else:
-#                     block = functools.partial(PVConv, kernel_size=3, 
-#                             resolution=int(vr * voxel_resolution), attention=attention,
-#                             dropout=dropout,
-#                             with_se=with_se, # with_se_relu=True,
-#                             normalize=normalize, eps=eps,
-#                             verbose=verbose)
-
-#                 fp_blocks.append(block(in_channels, out_channels))
-#                 in_channels = out_channels
-#         if len(fp_blocks) == 1:
-#             fp_layers.append(fp_blocks[0])
-#         else:
-#             fp_layers.append(nn.Sequential(*fp_blocks))
-
-#         c += 1
-
-#     return fp_layers, in_channels
-
-

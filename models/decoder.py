@@ -8,7 +8,6 @@ from collections import OrderedDict
 
 from modules.flows import CondRealNVPFlow3DTriple
 from modules.layers import MLP, StandartGaussian
-from modules.fre_loss import fre_loss
     
 class WeightsMLP(nn.Module):
     def __init__(
@@ -421,10 +420,6 @@ class Decoder(nn.Module):
             output.append(flow_out)
 
         recon_loss = self.get_pnll(output, mixture_weights_logits)
-
-        if self.high_freq_recon_coeff > 0:
-            fre_loss_item = fre_loss(p, out_shape, lmax=self.high_freq_recon_lmax) * 10 ** 7
-            recon_loss = (1 - self.high_freq_recon_coeff) * recon_loss + self.high_freq_recon_coeff * fre_loss_item
 
         return recon_loss, torch.mean(mixture_weights, dim=0)
 
