@@ -3,6 +3,7 @@ import time
 import torch
 import torchvision
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 import numpy as np
 from loguru import logger
 import torch.distributed as dist
@@ -24,7 +25,9 @@ class BaseTrainer(ABC):
         self.train_loader, self.test_loader = None, None
         self.local_rank = args.local_rank
         self.writer = None
+        self.ema = None
         self.num_points = cfg.data.n_sample_points
+        self.use_ema = cfg.training.opt.ema
         self.best_eval_epoch = 0
         self.best_eval_score = -1
         self.start_epoch = 1
@@ -40,6 +43,21 @@ class BaseTrainer(ABC):
     @abstractmethod
     def eval(self, *args, **kwargs):
         pass
+
+    @contextmanager
+    def ema_scope(self, context=None):
+        if self.use_ema:
+            self.ema.store(self.model.parameters())
+            self.ema.copy_to(self.model)
+            if context is not None:
+                logger.info(f"{context}: Switched to EMA weights")
+        try:
+            yield None
+        finally:
+            if self.use_ema:
+                self.ema.restore(self.model.parameters())
+                if context is not None:
+                    logger.info(f"{context}: Restored training weights")
 
     def log_loss(self, loss_dict, writer=None, step=None):
         """Log loss values to writer"""

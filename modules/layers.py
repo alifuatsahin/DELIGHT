@@ -95,12 +95,11 @@ class MLP(nn.Module):
                 nn.init.constant_(self.logvars[-1].bias.data, logvar_bias)
 
     def forward(self, input, warmup=False):
-        features = self.features(input)
-
         if warmup:
-            out = torch.zeros(features.shape[0], self.out_features, device=features.device)
+            out = torch.zeros(input.shape[0], self.out_features, device=input.device)
             return out, out
         else:
+            features = self.features(input)
             if self.deterministic:
                 mus = self.mus(features)
 

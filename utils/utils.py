@@ -89,7 +89,7 @@ class AverageMeter:
         self.count += n
         self.avg = self.sum / self.count if self.count > 0 else 0
 
-def get_opt(params, cfgopt, use_ema, other_cfg=None):
+def get_opt(params, cfgopt, other_cfg=None):
     # Create optimizer
     if cfgopt.type == 'adam':
         optimizer = optim.Adam(params,
@@ -181,10 +181,10 @@ def get_opt(params, cfgopt, use_ema, other_cfg=None):
     else:
         raise ValueError(f"Unsupported scheduler type: {scheduler_type}")
     
-    # Apply EMA if requested
-    if use_ema:
-        from .ema import EMA
-        optimizer = EMA(optimizer, ema_decay=cfgopt.ema_decay)
+    # # Apply EMA if requested
+    # if use_ema:
+    #     from .ema import EMA
+    #     optimizer = EMA(optimizer, ema_decay=cfgopt.ema_decay)
 
     return optimizer, scheduler
 

@@ -31,7 +31,7 @@ class Quantizer(nn.Module):
 
         self.pre_quant_layer = PointNetSAModule(
             num_centers=self.sequence_len, 
-            radius=0.15, 
+            radius=0.2, 
             num_neighbors=32, 
             in_channels=input_dim, 
             out_channels=[self.e_dim]

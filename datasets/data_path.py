@@ -24,7 +24,7 @@ def get_path(dataname=None):
         assert(
             dataname in dataset_path), f'not found {dataname}, only: {list(dataset_path.keys())}'
         for p in dataset_path[dataname]:
-            print(f'searching: {dataname}, get: {p}')
+            # print(f'searching: {dataname}, get: {p}')
             if os.path.exists(p):
                 return p
         ValueError(

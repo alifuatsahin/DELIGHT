@@ -28,7 +28,6 @@ class Trainer(BaseTrainer):
         self.optimizer, self.scheduler = utils.get_opt(
             self.model.parameters(),
             cfg.training.opt,
-            cfg.training.opt.ema, 
             cfg
         )
         
@@ -59,8 +58,8 @@ class Trainer(BaseTrainer):
             'epoch': epoch,
             'step': step,
         }
-        if self.cfg.training.opt.ema:
-            data['ema_model'] = self.optimizer.get_ema_model_state_dict(self.model)
+        if self.use_ema:
+            data['ema'] = self.ema.state_dict()
         save_dir = self.cfg.save_dir if save_dir is None else save_dir
         save_name = "epoch_%s_iters_%s.pt" % (epoch, step) if save_name is None else save_name
         path = os.path.join(save_dir, "checkpoints", save_name)
@@ -77,9 +76,17 @@ class Trainer(BaseTrainer):
 
         self.model = VAE(cfg).to(self.device)
 
+        logger.info('Model initialized with num parameters: {}', sum(p.numel() for p in self.model.parameters()))
+        logger.info('Encoder num parameters: {}', sum(p.numel() for p in self.model.encoder.parameters()))
+        logger.info('Decoder num parameters: {}', sum(p.numel() for p in self.model.decoder.parameters()))
+
         if args.distributed:
             self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
 
+        if self.use_ema and self.args.global_rank == 0:
+            from utils.ema import EMA
+            self.ema = EMA(self.model, decay=cfg.training.opt.ema_decay)
+            logger.info('Using EMA with decay={}', cfg.training.opt.ema_decay)
 
     def train_iter(self, batch, step):
         """ forward one iteration; and step optimizer  
@@ -103,6 +110,9 @@ class Trainer(BaseTrainer):
         self.grad_scalar.step(self.optimizer)
         self.grad_scalar.update()
 
+        if self.use_ema and self.args.global_rank == 0:
+            self.ema(self.model)
+
         # Log metrics efficiently
         if self.writer is not None and step is not None:
             for k, v in logs_dict.items():
@@ -115,21 +125,18 @@ class Trainer(BaseTrainer):
     def sample(self, n_sampled_points, n_samples=1):
         """ sample from the model """
         # Use EMA weights if available
-        if self.cfg.training.opt.ema:
-            self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
-        was_training = self.model.training
-        self.model.eval()
-        try:
-            if hasattr(self.model, 'module'):
-                samples, labels = self.model.module.sample(n_sampled_points, n_samples)
-            else:
-                samples, labels = self.model.sample(n_sampled_points, n_samples)
-            output = samples.permute(0, 2, 1).contiguous()  # B3N->BN3
-        finally:
-            if was_training:
-                self.model.train()
-            if self.cfg.training.opt.ema:
-                self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
+        with self.ema_scope():
+            was_training = self.model.training
+            self.model.eval()
+            try:
+                if hasattr(self.model, 'module'):
+                    samples, labels = self.model.module.sample(n_sampled_points, n_samples)
+                else:
+                    samples, labels = self.model.sample(n_sampled_points, n_samples)
+                output = samples.permute(0, 2, 1).contiguous()  # B3N->BN3
+            finally:
+                if was_training:
+                    self.model.train()
 
         return output, labels
 
@@ -140,25 +147,20 @@ class Trainer(BaseTrainer):
         
         Args:
             x: input point clouds
-            use_ema: whether to use EMA weights
         """
-        # For reconstruction evaluation, typically use current weights to measure training progress
-        if self.cfg.training.opt.ema:
-            self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
-        was_training = self.model.training
-        self.model.eval()
-        try:
-            if hasattr(self.model, 'module'):
-                samples, labels = self.model.module.recont(x)
-            else:
-                # For single GPU models
-                samples, labels = self.model.recont(x)
-            samples = samples.permute(0, 2, 1).contiguous() # B3N -> BN3
-        finally:
-            if was_training:
-                self.model.train()
-            if self.cfg.training.opt.ema:
-                self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
+        with self.ema_scope():
+            was_training = self.model.training
+            self.model.eval()
+            try:
+                if hasattr(self.model, 'module'):
+                    samples, labels = self.model.module.recont(x)
+                else:
+                    # For single GPU models
+                    samples, labels = self.model.recont(x)
+                samples = samples.permute(0, 2, 1).contiguous() # B3N -> BN3
+            finally:
+                if was_training:
+                    self.model.train()
 
         return samples, labels
     

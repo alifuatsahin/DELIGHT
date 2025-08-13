@@ -264,8 +264,8 @@ class PVConv(nn.Module):
         self.voxel_layers = nn.Sequential(*voxel_layers)
         if attention:
             # self.attn = LinearAttention(out_channels, verbose=verbose)
-            self.attn = GateLinearAttentionNoSilu(out_channels)
-            # self.attn = SelfAttentionBlock(out_channels)
+            # self.attn = GateLinearAttentionNoSilu(out_channels)
+            self.attn = SelfAttentionBlock(out_channels)
         else:
             self.attn = None
         if add_point_feat:

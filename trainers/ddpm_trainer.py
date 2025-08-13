@@ -28,7 +28,6 @@ class Trainer(BaseTrainer):
         self.optimizer, self.scheduler = utils.get_opt(
             self.model.parameters(),
             cfg.training.opt,
-            cfg.training.opt.ema, 
             cfg
         )
         
@@ -58,6 +57,8 @@ class Trainer(BaseTrainer):
             'epoch': epoch,
             'step': step,
         }
+        if self.use_ema:
+            data['ema'] = self.ema.state_dict()
         save_dir = self.cfg.save_dir if save_dir is None else save_dir
         save_name = "epoch_%s_iters_%s.pt" % (epoch, step) if save_name is None else save_name
         path = os.path.join(save_dir, "checkpoints", save_name)
@@ -77,13 +78,26 @@ class Trainer(BaseTrainer):
 
         self.vae = VAE(cfg).eval().to(self.device)  # Use eval mode for VAE during training
         ckpt = torch.load(args.vae_checkpoint, weights_only=True)
-        vae_ckpt = self.filter_name(ckpt['ema_model'] if 'ema_model' in ckpt.keys() else ckpt['model'])
+        vae_ckpt = self.filter_name(ckpt['model'])
         self.vae.load_state_dict(vae_ckpt)
+
+        if 'ema' in ckpt.keys():
+            ema_state_dict = {}
+            for k, v in ckpt['ema'].items():
+                # Only copy keys that match model parameters
+                if k in dict(self.vae.named_parameters()):
+                    ema_state_dict[k] = v
+            self.vae.load_state_dict(ema_state_dict, strict=False)
 
         self.model = DDPM(cfg).to(self.device)
         
         if args.distributed:
             self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[args.local_rank], output_device=args.local_rank)
+        
+        if self.use_ema:
+            from utils.ema import EMA
+            self.ema = EMA(self.model, decay=cfg.training.opt.ema_decay)
+            logger.info('Using EMA with decay={}', cfg.training.opt.ema_decay)
     
     def train_iter(self, batch, step):
         """ forward one iteration; and step optimizer  
@@ -118,46 +132,36 @@ class Trainer(BaseTrainer):
     def sample(self, n_sampled_points, n_samples=1):
         """ sample from the model """
         # Use EMA weights if available
-        if self.cfg.training.opt.ema:
-            self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
-
-        was_training = self.model.training
-        if was_training:
-            self.model.eval()
-
-        try:
-            # Sample latents using diffusion model
-            latents = self.model.sample(batch_size=n_samples)
-            
-            # Decode the latents using the VAE
-            samples, labels = self.vae.decode(latents, n_sampled_points=n_sampled_points)
-
-        finally:
+        with self.ema_scope():
+            was_training = self.model.training
             if was_training:
-                self.model.train()
-            # Always restore original parameters
-            if self.cfg.training.opt.ema:
-                self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
+                self.model.eval()
+            try:
+                if hasattr(self.model, 'module'):
+                    latents = self.model.module.sample(batch_size=n_samples)
+                else:
+                    latents = self.model.sample(batch_size=n_samples)
 
-        return samples, labels
+                # Decode the latents using the VAE
+                samples, labels = self.vae.decode(latents, n_sampled_points=n_sampled_points)
+                output = samples.permute(0, 2, 1).contiguous()  # B3N->BN3
+            finally:
+                if was_training:
+                    self.model.train()
+
+        return output, labels
 
     @torch.no_grad()
     def eval(self, x):
-        """ evaluate the model on the given input x """
-        # Use EMA weights if available
-        if self.cfg.training.opt.ema:
-            self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
-        was_training = self.model.training
-        if was_training:
-            self.model.eval()
+        """ 
+        Evaluate the model on the given input x (reconstruction)
         
-        try:
-            samples, labels = self.vae.recont(x)
-        finally:
-            if was_training:
-                self.model.train()
-            # Always restore original parameters
-            if self.cfg.training.opt.ema:
-                self.optimizer.swap_parameters_with_ema(store_params_in_ema=True)
+        Args:
+            x: input point clouds
+            use_ema: whether to use EMA weights
+        """
+        # For reconstruction evaluation, typically use current weights to measure training progress
+        samples, labels = self.vae.recont(x)
+        samples = samples.permute(0, 2, 1).contiguous() # B3N -> BN3
 
         return samples, labels
