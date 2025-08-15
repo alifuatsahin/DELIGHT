@@ -10,7 +10,7 @@ import torch
 import third_party.pvcnn.functional as F
 from torch.amp import custom_fwd, custom_bwd
 
-from .attention import SelfAttention
+from .attention import TransformerBlock
 
 class SE3d(nn.Module):
     def __init__(self, channel, reduction=8):
@@ -147,7 +147,7 @@ class PVConv(nn.Module):
         if attention:
             # self.attn = LinearAttention(out_channels, verbose=verbose)
             # self.attn = GateLinearAttentionNoSilu(out_channels)
-            self.attn = SelfAttention(out_channels)
+            self.attn = TransformerBlock(out_channels, dim_head=32)
         else:
             self.attn = None
         if add_point_feat:

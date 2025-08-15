@@ -10,9 +10,44 @@ import warnings
 from typing import Union
 
 import torch
+from loguru import logger
 
 from .optimal_transport import OTPlanSampler
 
+def get_CFM(cfg):
+    """Get the Conditional Flow Matcher (CFM) based on the configuration."""
+    if cfg.cfm_method == "independent":
+        cfg.ot_method = "none"
+        logger.info("Using independent CFM method, no OT plan sampler will be used.")
+
+    if cfg.ot_method != "none":
+        ot_sampler = OTPlanSampler(
+            method=cfg.ot_method,
+        )
+    else:
+        assert cfg.cfm_method == "independent", "OT plan sampler must be specified for CFM methods other than independent."
+        ot_sampler = None
+
+    if cfg.cfm_method == "independent":
+        cfm = ConditionalFlowMatcher(sigma=cfg.sigma)
+        return cfm
+    elif cfg.cfm_method == "exact_ot":
+        cfm = ExactOptimalTransportConditionalFlowMatcher(sigma=cfg.sigma, use_hybrid_coupling=cfg.use_hybrid_coupling, beta=cfg.beta)
+        cfm.ot_sampler = ot_sampler
+        return cfm
+    elif cfg.cfm_method == "variance":
+        cfm = VariancePreservingConditionalFlowMatcher(sigma=cfg.sigma, use_hybrid_coupling=cfg.use_hybrid_coupling, beta=cfg.beta)
+        cfm.ot_sampler = ot_sampler
+        return cfm
+    elif cfg.cfm_method == "target":
+        cfm = TargetConditionalFlowMatcher(sigma=cfg.sigma, use_hybrid_coupling=cfg.use_hybrid_coupling, beta=cfg.beta)
+        cfm.ot_sampler = ot_sampler
+        return cfm
+    elif cfg.cfm_method == "schrodinger_bridge":
+        cfm = SchrodingerBridgeConditionalFlowMatcher(sigma=cfg.sigma, ot_method=cfg.ot_method, use_hybrid_coupling=cfg.use_hybrid_coupling, beta=cfg.beta)
+        return cfm
+    else:
+        raise ValueError(f"Unknown CFM method: {cfg.cfm_method}")
 
 def pad_t_like_x(t, x):
     """Function to reshape the time vector t by the number of dimensions of x.
@@ -223,7 +258,7 @@ class ExactOptimalTransportConditionalFlowMatcher(ConditionalFlowMatcher):
     It overrides the sample_location_and_conditional_flow.
     """
 
-    def __init__(self, sigma: Union[float, int] = 0.0):
+    def __init__(self, sigma: Union[float, int] = 0.0, use_hybrid_coupling: bool = False, beta: float = 0.2):
         r"""Initialize the ConditionalFlowMatcher class. It requires the hyper-parameter $\sigma$.
 
         Parameters
@@ -233,6 +268,8 @@ class ExactOptimalTransportConditionalFlowMatcher(ConditionalFlowMatcher):
         """
         super().__init__(sigma)
         self.ot_sampler = OTPlanSampler(method="exact")
+        self.use_hybrid_coupling = use_hybrid_coupling
+        self.beta = beta
 
     def sample_location_and_conditional_flow(self, x0, x1, t=None, return_noise=False):
         r"""
@@ -265,6 +302,9 @@ class ExactOptimalTransportConditionalFlowMatcher(ConditionalFlowMatcher):
         [1] Improving and Generalizing Flow-Based Generative Models with minibatch optimal transport, Preprint, Tong et al.
         """
         x0, x1 = self.ot_sampler.sample_plan(x0, x1)
+        if self.use_hybrid_coupling:
+            eps = torch.randn_like(x0)
+            x0 = math.sqrt((1 - self.beta)) * x0 + math.sqrt(self.beta) * eps
         return super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
 
     def guided_sample_location_and_conditional_flow(
@@ -396,7 +436,7 @@ class SchrodingerBridgeConditionalFlowMatcher(ConditionalFlowMatcher):
     sample_location_and_conditional_flow functions.
     """
 
-    def __init__(self, sigma: Union[float, int] = 1.0, ot_method="exact"):
+    def __init__(self, sigma: Union[float, int] = 1.0, ot_method="exact", use_hybrid_coupling: bool = False, beta: float = 0.2):
         r"""Initialize the SchrodingerBridgeConditionalFlowMatcher class. It requires the hyper-
         parameter $\sigma$ and the entropic OT map.
 
@@ -413,7 +453,7 @@ class SchrodingerBridgeConditionalFlowMatcher(ConditionalFlowMatcher):
             raise ValueError(f"Sigma must be strictly positive, got {sigma}.")
         elif sigma < 1e-3:
             warnings.warn("Small sigma values may lead to numerical instability.")
-        super().__init__(sigma)
+        super().__init__(sigma, use_hybrid_coupling, beta)
         self.ot_method = ot_method
         self.ot_sampler = OTPlanSampler(method=ot_method, reg=2 * self.sigma**2)
 
@@ -500,6 +540,9 @@ class SchrodingerBridgeConditionalFlowMatcher(ConditionalFlowMatcher):
         [1] Improving and Generalizing Flow-Based Generative Models with minibatch optimal transport, Preprint, Tong et al.
         """
         x0, x1 = self.ot_sampler.sample_plan(x0, x1)
+        if self.use_hybrid_coupling:
+            eps = torch.randn_like(x0)
+            x0 = math.sqrt((1 - self.beta)) * x0 + math.sqrt(self.beta) * eps
         return super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
 
     def guided_sample_location_and_conditional_flow(

@@ -188,9 +188,8 @@ class VAE(nn.Module):
             
         return max(min(self.min_kl_coeff + (self.max_kl_coeff - self.min_kl_coeff) * (step - constant_step) / anneal_portion, self.max_kl_coeff), self.min_kl_coeff)
 
-    def forward(self, p, g, n_sampled_points=None, step=None):
-        p = p.transpose(1, 2)
-        sampled_cloud_size = p.shape[2] if n_sampled_points is None else n_sampled_points
+    def forward(self, p, g, step=None):
+        # p = p.transpose(1, 2)
         latent, entropy_loss, info = self.encode(g)
 
         if self.anneal_kl:
@@ -205,7 +204,7 @@ class VAE(nn.Module):
         else:
             warmup = False
 
-        recont_loss, mean_weights = self.decoder(p, latent, sampled_cloud_size, warmup)
+        recont_loss, mean_weights = self.decoder(p, latent, warmup)
 
         output = {
             "loss": recont_loss + entropy_loss,

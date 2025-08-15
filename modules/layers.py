@@ -1,7 +1,9 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from collections import OrderedDict
+
+from .attention import TransformerBlock
+from utils.diffusion_helper import zero_module
 
 class MLP(nn.Module):
     def __init__(
@@ -80,45 +82,59 @@ class StandartGaussian(nn.Module):
         """
         out = torch.zeros(features.shape[0], self.out_features, device=features.device)
         return out, out
-    
 
-class FiLMCond(nn.Module):
-    def __init__(self, input_dim, latent_dim, feat_dim, weight_std=0.001, bias=0.0):
+class ResBlock(nn.Module):
+    def __init__(
+        self,
+        channels,
+        emb_channels,
+        dropout=0.0,
+        out_channels=None,
+        use_scale_shift_norm=False,
+    ):
         super().__init__()
-        self.cond = nn.Sequential([
-            nn.Conv1d(input_dim, feat_dim, kernel_size=1),
-            nn.BatchNorm1d(feat_dim),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(feat_dim, feat_dim, kernel_size=1),
-        ])
+        self.channels = channels
+        self.emb_channels = emb_channels
+        self.dropout = dropout
+        self.out_channels = out_channels or channels
+        self.use_scale_shift_norm = use_scale_shift_norm
 
-        self.gamma = nn.Sequential(OrderedDict([
-            nn.Linear(latent_dim, feat_dim, bias=False),
-            nn.BatchNorm1d(feat_dim),
+        self.in_layers = nn.Sequential(
+            nn.BatchNorm1d(channels),
             nn.SiLU(),
-            nn.Linear(feat_dim, feat_dim, bias=True)
-        ]))
+            nn.Conv1d(channels, self.out_channels, 1),
+        )
 
-        self.beta = nn.Sequential(OrderedDict([
-            nn.Linear(latent_dim, feat_dim, bias=False),
-            nn.BatchNorm1d(feat_dim),
+        self.emb_layers = nn.Sequential(
             nn.SiLU(),
-            nn.Linear(feat_dim, feat_dim, bias=True)
-        ]))
+            nn.Linear(
+                emb_channels,
+                2 * self.out_channels if use_scale_shift_norm else self.out_channels,
+            ),
+        )
+        self.out_layers = nn.Sequential(
+            nn.BatchNorm1d(self.out_channels),
+            nn.SiLU(),
+            nn.Dropout(p=dropout),
+            nn.Conv1d(self.out_channels, self.out_channels, 1),
+        )
 
-        with torch.no_grad():
-            self.cond[-1].weight.data.normal_(std=weight_std)
-            nn.init.constant_(self.cond[-1].bias.data, bias)
-            self.gamma[-1].weight.data.normal_(std=weight_std)
-            nn.init.constant_(self.gamma[-1].bias.data, bias)
-            self.beta[-1].weight.data.normal_(std=weight_std)
-            nn.init.constant_(self.beta[-1].bias.data, bias)
+        if self.out_channels == channels:
+            self.skip_connection = nn.Identity()
+        else:
+            self.skip_connection = nn.Conv1d(channels, self.out_channels, 1)
 
-    def forward(self, x, context):
-        if context.dim() > 2:
-            context = context.view(context.size(0), -1).contiguous()
-
-        g = torch.add(F.softplus(self.gamma(context).unsqueeze(-1)), 1e-6)  # Ensure gamma is positive
-        b = self.beta(context).unsqueeze(-1)
-        out = g * self.cond(x) + b
-        return out
+    def forward(self, x, emb):
+        h = self.in_layers(x)
+        emb_out = self.emb_layers(emb)
+        while len(emb_out.shape) < len(h.shape):
+            emb_out = emb_out[..., None]
+        if self.use_scale_shift_norm:
+            out_norm, out_rest = self.out_layers[0], self.out_layers[1:]
+            scale, shift = torch.chunk(emb_out, 2, dim=1)
+            h = out_norm(h) * (1 + scale) + shift
+            h = out_rest(h)
+        else:
+            h = h + emb_out
+            h = self.out_layers(h)
+        return self.skip_connection(x) + h

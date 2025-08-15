@@ -31,21 +31,20 @@ DEFAULT_OPTS=(
     "data.num_workers" "10"
     "training.epochs" "500"
     "training.opt.lr" "1e-4"
-    "vae.latent_dim" "512"
+    "vae.latent_dim" "1024"
     "data.n_sample_points" "2048"
     "data.categories" "$DATA"
     "vae.quantizer" "softvq"
     "training.type" "vae"
-    "vae.softvq.e_dim" "8"
+    "vae.softvq.e_dim" "16"
     "vae.softvq.n_e" "56"
     "vae.softvq.num_codebooks" "64"
     "vae.anneal_kl" "False"
-    "vae.point_prior_n_layers" "1"
+    "vae.point_prior_n_layers" "0"
     "vae.softvq.l2_norm" "True"
     "training.opt.ema" "True"
-    "vae.n_flows" "4"
-    "vae.depth" "15"
-    "vae.feat_dim" "32"
+    "vae.flow.cfm_method" "exact_ot"  # Conditional Flow Matcher method ('exact_ot', 'target', 'schrodinger_bridge', 'independent')
+    "vae.flow.ot_method" "sinkhorn"  # Method for optimal transport ('sinkhorn', 'exact', 'partial', 'unbalanced')
 )
 
 # Combine base command with default options and any additional arguments

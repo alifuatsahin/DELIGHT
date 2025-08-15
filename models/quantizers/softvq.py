@@ -202,4 +202,4 @@ class Quantizer(nn.Module):
             z_sampled.append(embedding[k][indices[:, k]])  # [B, segment_length, e_dim]
         z_sampled = torch.stack(z_sampled, dim=1)  # [B, num_codebooks, segment_length, e_dim]
         z_sampled = z_sampled.view(batch_size, sequence_len, self.e_dim)  # [B, sequence_len, e_dim]
-        return z_sampled.view(batch_size, -1)
+        return z_sampled.transpose(1, 2).contiguous()

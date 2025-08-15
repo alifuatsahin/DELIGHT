@@ -1,13 +1,15 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchdiffeq  # For ODE integration
 import math
-import numpy as np
 from typing import List, Tuple, Optional, Dict, Any
 from collections import OrderedDict
+from einops import rearrange
 
-from modules.flows import CondRealNVPFlow3DTriple
+from modules.flows import FlowModel, FlowBase
 from modules.layers import MLP, StandartGaussian
+from modules.cfm import get_CFM
     
 class WeightsMLP(nn.Module):
     def __init__(
@@ -47,90 +49,23 @@ class WeightsMLP(nn.Module):
 
         return log_weights
 
-class DecBlock(nn.Module):
-    def __init__(
-        self,
-        depth: int,
-        feat_dim: int,
-        latent_dim: int,
-        weight_std: float = 0.01
-    ):
-        super().__init__()
-        self.depth = depth
-        self.feat_dim = feat_dim
-        self.latent_dim = latent_dim
-        self.weight_std = weight_std
-
-        # Create flow layers with alternating patterns
-        self.layers = nn.ModuleList([
-            CondRealNVPFlow3DTriple(
-                feat_dim, latent_dim,
-                weight_std=self.weight_std, 
-                pattern=(i % 2)
-            ) for i in range(self.depth)
-        ])
-        
-    def forward(
-        self, 
-        p: torch.Tensor, 
-        g: torch.Tensor, 
-        mode: str = 'direct'
-    ) -> Tuple[List[torch.Tensor], List[torch.Tensor], List[torch.Tensor]]:
-
-        ps, mus, logvars = [], [], []
-        
-        for i in range(self.depth):
-            if mode == 'direct':
-                cur_p = p if i == 0 else ps[-1]
-                buf = self.layers[i](cur_p, g, mode=mode)
-                ps = ps + buf[0]
-                mus = mus + buf[1]
-                logvars = logvars + buf[2]
-            elif mode == 'inverse':
-                cur_p = p if i == 0 else ps[0]
-                buf = self.layers[-(i + 1)](cur_p, g, mode=mode)
-                ps = buf[0] + ps
-                mus = buf[1] + mus
-                logvars = buf[2] + logvars
-
-        return ps, mus, logvars
-
-    
 class Decoder(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        self.n_flows = cfg.n_flows
-        self.depth = cfg.depth
-        self.feat_dim = cfg.feat_dim
+        self.n_flows = cfg.flow.n_flows
+        self.depth = cfg.flow.depth
+        self.width = cfg.flow.width
         self.latent_dim = cfg.latent_dim
         self.input_dim = cfg.input_dim
-        self.high_freq_recon_coeff = cfg.high_freq_recon_coeff
-        self.high_freq_recon_lmax = cfg.high_freq_recon_lmax
+        self.solver = cfg.flow.solver
+        self.atol = cfg.flow.atol
+        self.rtol = cfg.flow.rtol
         
         # Validate configuration
         self._validate_config()
 
-        # Compute optimal parameters under budget
-        self.flow_depth, self.feat_dim = self._get_decoder_params(min_feat_dim=4)
-
-        # Create decoder flows
-        self.decoder = nn.ModuleList([
-            DecBlock(
-                self.flow_depth,
-                self.feat_dim,
-                self.latent_dim,
-                weight_std=0.01
-            ) for _ in range(self.n_flows)
-        ])
-        
-        # Network to compute mixture weights from latent codes
-        self.mixture_weights_enc = WeightsMLP(
-            n_layers=cfg.weight_n_layers,
-            in_features=self.latent_dim,
-            out_features=self.n_flows,
-            out_weight_std=0.001,
-            out_bias=0.0
-        )
+        self.model = FlowBase(cfg)
+        self.FM = get_CFM(cfg.flow)
 
         if cfg.point_prior_n_layers > 0:
             # Prior network for initial point generation
@@ -148,73 +83,14 @@ class Decoder(nn.Module):
             self.point_prior = StandartGaussian(
                 out_features=cfg.input_dim
             )
-
-        # Initialize parameters
-        self._initialize_parameters()
         
     def _validate_config(self):
         """Validate decoder configuration parameters."""
         assert self.n_flows > 0, "Number of flows must be positive"
         assert self.depth > 0, "Depth must be positive"
-        assert self.feat_dim > 0, "Feature dimension must be positive"
+        assert self.width > 0, "Feature dimension must be positive"
         assert self.latent_dim > 0, "Latent dimension must be positive"
         assert self.input_dim > 0, "Input dimension must be positive"
-        
-    def _initialize_parameters(self):
-        """Initialize decoder parameters."""
-        
-        # Initialize decoder blocks
-        for decoder_block in self.decoder:
-            for layer in decoder_block.layers:
-                if hasattr(layer, 'weight') and layer.weight is not None:
-                    nn.init.xavier_uniform_(layer.weight)
-                if hasattr(layer, 'bias') and layer.bias is not None:
-                    nn.init.zeros_(layer.bias)
-
-    def _get_decoder_params(self, min_feat_dim: int = 4) -> Tuple[int, int]:
-        """
-        Decide feature size and number of coupling layers under a parameter budget.
-        Returns:
-            Tuple of (flow_depth, feat_dim)
-        """
-        if self.n_flows == 1:
-            return self.depth, self.feat_dim
-
-        # Compute optimal flow depth based on number of flows
-        flow_depth = max(1, math.ceil(self.depth / math.sqrt(self.n_flows)))
-        feat_dim = self.feat_dim
-        
-        # Get baseline parameter count for comparison
-        baseline_count = self.get_param_count_for(self.depth, self.feat_dim)
-        
-        # Adjust feat_dim to stay within parameter budget
-        current_count = self.get_param_count_for(flow_depth, feat_dim)
-        
-        while current_count > baseline_count and feat_dim > min_feat_dim:
-            feat_dim -= 1
-            current_count = self.get_param_count_for(flow_depth, feat_dim)
-            
-        # Ensure we don't go below minimum
-        feat_dim = max(feat_dim, min_feat_dim)
-
-        return flow_depth, feat_dim
-
-    def get_param_count_for(self, flow_depth: int, feat_dim: int) -> int:
-        """
-        Estimate parameter count for given configuration.
-        
-        Args:
-            flow_depth: number of flow layers
-            feat_dim: feature dimension
-            
-        Returns:
-            Estimated parameter count
-        """
-        # Rough estimation of CondRealNVPFlow3D parameters
-        count_single_flow = 18 * feat_dim + 4 * feat_dim * self.latent_dim + 6 * feat_dim**2
-        count_triple_flow = 3 * count_single_flow
-        total_count = flow_depth * count_triple_flow * self.n_flows
-        return total_count
 
     def get_weights(
         self, 
@@ -260,204 +136,59 @@ class Decoder(nn.Module):
     def decode(
         self, 
         latents: torch.Tensor, 
-        n_sampled_points: int
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Generate point clouds from latent codes using mixture of flows.
-        
-        Args:
-            latents: latent codes (B, latent_dim)
-            n_sampled_points: number of points to generate per sample
-            
-        Returns:
-            Tuple of (samples, labels, mixture_weights_logits)
-            - samples: generated points (B, input_dim, n_sampled_points)
-            - labels: flow assignment labels (B, n_sampled_points)  
-            - mixture_weights_logits: mixture weights (B, n_flows)
-        """
-        if latents.dim() > 2: # Handle case where latents are (B, D, N)
-            latents = latents.view(latents.size(0), -1)
+        n_sampled_points: int,
+        num_steps: int = 100,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        B = latents.shape[0]
 
-        batch_size = latents.shape[0]
-        device = latents.device
+        p_prior_mus, p_prior_logvars = self.point_prior(latents.view(B, -1))
 
-        # Get mixture weights for all samples at once
-        mixture_weights_logits = self.get_weights(latents, warmup=False)
+        # Expand prior parameters to match point dimensions
+        p_prior_mus = p_prior_mus.unsqueeze(2).expand(B, self.input_dim, n_sampled_points)
+        p_prior_logvars = p_prior_logvars.unsqueeze(2).expand(B, self.input_dim, n_sampled_points)
 
-        # Convert to probabilities
-        mixture_probs = torch.exp(mixture_weights_logits).detach().cpu().numpy()
+        x0 = self.reparametrize(p_prior_mus, p_prior_logvars)  # Initial point cloud
 
-        # Pre-allocate output tensors
-        all_samples = torch.zeros(
-            batch_size, self.input_dim, n_sampled_points, 
-            device=device, dtype=latents.dtype
-        )
-        all_labels = torch.zeros(
-            batch_size, n_sampled_points, 
-            device=device, dtype=torch.long
+        traj = torchdiffeq.odeint(
+            lambda t, x: self.model.forward(x, t.expand(x.shape[0], n_sampled_points), context=latents),
+            x0,
+            torch.linspace(0, 1, num_steps, device=x0.device),
+            atol=self.atol,
+            rtol=self.rtol,
+            method=self.solver,
         )
 
-        # Process each sample in the batch
-        for b in range(batch_size):
-            g = latents[b:b+1]  # Keep batch dimension
-            probs = mixture_probs[b]
-            
-            # Sample flow assignments for this sample
-            flow_assignments = np.random.choice(
-                self.n_flows, 
-                size=n_sampled_points, 
-                p=probs
-            )
-            
-            # Count points per flow
-            flow_counts = np.bincount(flow_assignments, minlength=self.n_flows)
-            
-            # Generate points for each flow
-            sample_parts = []
-            
-            for flow_idx, count in enumerate(flow_counts):
-                if count == 0:
-                    continue
-                    
-                # Generate prior samples for this flow
-                p_prior_mus, p_prior_logvars = self.point_prior(g)
-                
-                # Expand to required number of points
-                p_prior_mus = p_prior_mus.unsqueeze(2).expand(-1, self.input_dim, count)
-                p_prior_logvars = p_prior_logvars.unsqueeze(2).expand(-1, self.input_dim, count)
-                
-                # Sample from prior
-                p_prior_samples = self.reparametrize(p_prior_mus, p_prior_logvars)
-                
-                # Apply flow transformation
-                flow_outputs = self.decoder[flow_idx](p_prior_samples, g, mode='direct')
-                final_points = flow_outputs[0][-1]  # Last transformation output
-                
-                # Store results
-                sample_parts.append((final_points, flow_idx, count))
-                
-            # Combine results maintaining original order
-            for final_points, flow_idx, count in sample_parts:
-                # Find positions for this flow in the original assignment
-                flow_mask = flow_assignments == flow_idx
-                flow_positions = np.where(flow_mask)[0]
-                
-                # Assign points and labels
-                all_samples[b, :, flow_positions] = final_points[0, :, :count]
-                all_labels[b, flow_positions] = flow_idx + 1  # 1-indexed labels
-
-        return all_samples, all_labels
+        return traj[-1].transpose(1, 2), torch.ones(latents.shape[0], n_sampled_points, device=latents.device)
 
     def forward(
         self, 
         p: torch.Tensor, 
-        g: torch.Tensor, 
-        n_sampled_points: int, 
+        latents: torch.Tensor, 
         warmup: bool = False
-    ) -> Tuple[List[Dict[str, Any]], torch.Tensor]:
-        """
-        Forward pass during training (inverse flow to compute likelihoods).
-        
-        Args:
-            p: input point clouds (B, input_dim, N)
-            g: conditioning latent vectors (B, latent_dim)
-            n_sampled_points: number of points per flow (for compatibility)
-            warmup: whether to use uniform mixture weights
-            
-        Returns:
-            Tuple of (flow_outputs, mixture_weights_logits)
-            - flow_outputs: list of dicts with flow statistics
-            - mixture_weights_logits: mixture weights (B, n_flows)
-        """
-        if g.dim() > 2: # Handle case where latents are (B, D, N)
-            g = g.view(g.size(0), -1)
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
 
-        batch_size = g.shape[0]
-        mixture_weights_logits = self.get_weights(g, warmup=warmup)
-        mixture_weights = torch.exp(mixture_weights_logits)
+        B, N, C = p.shape
 
-        if self.high_freq_recon_coeff > 0:
-            flow_assignments = torch.multinomial(mixture_weights, n_sampled_points, replacement=True)
-            out_shape = torch.zeros(batch_size, self.input_dim, n_sampled_points, device=p.device)
+        p_prior_mus, p_prior_logvars = self.point_prior(latents.view(latents.shape[0], -1), warmup=warmup)
 
-        # Each flow processes the same number of points during training
-        n_sample_flow = [n_sampled_points] * self.n_flows
-            
-        output = []
+        # Expand prior parameters to match point dimensions
+        p_prior_mus = p_prior_mus.unsqueeze(1).expand(B, N, C)
+        p_prior_logvars = p_prior_logvars.unsqueeze(1).expand(B, N, C)
 
-        for i, decoder_block in enumerate(self.decoder):
-            # Generate output parts for each flow decoder
-            flow_out = {}
-            
-            # Get prior parameters
-            p_prior_mus, p_prior_logvars = self.point_prior(g, warmup=warmup)
+        x0 = self.reparametrize(p_prior_mus, p_prior_logvars)  # Initial point cloud
 
-            # Expand prior parameters to match point dimensions
-            flow_out['p_prior_mus'] = [
-                p_prior_mus.unsqueeze(2).expand(
-                    batch_size, self.input_dim, n_sample_flow[i]
-                )
-            ]
-            flow_out['p_prior_logvars'] = [
-                p_prior_logvars.unsqueeze(2).expand(
-                    batch_size, self.input_dim, n_sample_flow[i]
-                )
-            ]
-            
-            # Apply inverse flow transformation to input points
-            buf = decoder_block(p, g, mode='inverse')
-            
-            # Combine results
-            flow_out['p_prior_samples'] = buf[0] + [p]
-            flow_out['p_prior_mus'].extend(buf[1])
-            flow_out['p_prior_logvars'].extend(buf[2])
+        xt = torch.zeros_like(x0)
+        ut = torch.zeros_like(x0)
+        t = torch.zeros(B, N, device=x0.device)
+        for i in range(B):
+            t[i], xt[i], ut[i] = self.FM.sample_location_and_conditional_flow(x0[i], p[i])
 
-            if self.high_freq_recon_coeff > 0:
-                for b in range(batch_size):
-                    mask = (flow_assignments[b] == i)
-                    out_shape[b, :, mask] = flow_out['p_prior_samples'][0][b, :, mask]
-                
-            output.append(flow_out)
+        xt = xt.transpose(1, 2).contiguous()  # (B, C, N)
+        ut = ut.transpose(1, 2).contiguous()  # (B, C, N)
+        vt = self.model(xt, t, context=latents)
+        loss = torch.mean((vt - ut) ** 2)
 
-        recon_loss = self.get_pnll(output, mixture_weights_logits)
-
-        return recon_loss, torch.mean(mixture_weights, dim=0)
-
-    def get_pnll(self, output, mixture_weights_logits):
-        log_weights = mixture_weights_logits.unsqueeze(1)
-        
-        num_patches = len(output)
-        num_batches = output[0]['p_prior_mus'][0].shape[0]
-        pnll = []
-        for i in range(num_batches):
-            loss_pnll_over_patches = []
-            for j in range(num_patches):
-                cur_mus = output[j]['p_prior_mus'][0][i, :, :]
-                cur_logvars = output[j]['p_prior_logvars'][0][i, :, :]
-                # compute sum of log determinant of each shape
-                cur_log_determinant = sum(output[j]['p_prior_logvars'])[i, :, :]
-                cur_samples = output[j]['p_prior_samples'][0][i, :, :]
-
-                # compute the log probability of each shape in each flow
-                part_1 = -torch.sum(cur_log_determinant + ((cur_samples - cur_mus) ** 2 / torch.exp(cur_logvars)),
-                                    dim=0, keepdim=True)
-                part_2 = -np.log(2.0 * np.pi) * cur_samples.shape[0]
-                cur_pnll = 0.5 * torch.add(part_1, part_2)
-                loss_pnll_over_patches.append(cur_pnll)
-            loss_pnll_over_patches = torch.transpose(torch.cat(loss_pnll_over_patches, dim=0), 0, 1)
-
-            # compute the log probability of each shape in all flows by adding its log weights
-            log_probs_pnll = loss_pnll_over_patches + log_weights[i]
-            log_probs_pnll = torch.logsumexp(log_probs_pnll, dim=-1)
-            log_probs_pnll = -torch.sum(log_probs_pnll)
-
-            pnll.append(log_probs_pnll.unsqueeze(0))
-
-        # compute the average loss over the batch
-        pnll = torch.cat(pnll)
-        pnll = torch.mean(pnll)
-
-        return pnll
+        return loss, [1]  # Placeholder for flow labels, replace with actual labels if needed
     
     def estimate_parameters(self) -> Dict[str, int]:
         """
@@ -467,28 +198,17 @@ class Decoder(nn.Module):
             Dictionary with parameter counts
         """
         total_params = sum(p.numel() for p in self.parameters())
-        decoder_params = sum(p.numel() for decoder in self.decoder for p in decoder.parameters())
-        weights_params = sum(p.numel() for p in self.mixture_weights_enc.parameters())
+        decoder_params = sum(p.numel() for p in self.decoder.parameters())
         prior_params = sum(p.numel() for p in self.point_prior.parameters())
         
         return {
             "total": total_params,
             "decoder_flows": decoder_params,
-            "mixture_weights": weights_params,
             "point_prior": prior_params,
-            "other": total_params - decoder_params - weights_params - prior_params
         }
     
-    def __repr__(self) -> str:
-        """String representation of the decoder."""
-        param_stats = self.estimate_parameters()
-        return (f"Decoder(n_flows={self.n_flows}, "
-                f"flow_depth={self.flow_depth}, "
-                f"feat_dim={self.feat_dim}, "
-                f"latent_dim={self.latent_dim}, "
-                f"total_params={param_stats['total']:,})")
-    
-    def get_device(self) -> torch.device:
+    @property
+    def device(self) -> torch.device:
         """Get the device of the model parameters."""
         return next(self.parameters()).device
     

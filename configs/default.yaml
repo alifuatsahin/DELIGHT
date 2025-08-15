@@ -3,7 +3,7 @@ model:
   input_dim: 3
   n_flows: 4
   depth: 64
-  feat_dim: 63
+  width: 63
   extra_feature_channels: 0
   posterior_n_layers: 1
   point_prior_n_layers: 3
