@@ -188,9 +188,9 @@ class VAE(nn.Module):
             
         return max(min(self.min_kl_coeff + (self.max_kl_coeff - self.min_kl_coeff) * (step - constant_step) / anneal_portion, self.max_kl_coeff), self.min_kl_coeff)
 
-    def forward(self, p, g, step=None):
+    def forward(self, p, step=None):
         # p = p.transpose(1, 2)
-        latent, entropy_loss, info = self.encode(g)
+        latent, entropy_loss, info = self.encode(p)
 
         if self.anneal_kl:
             kl_coeff = self.get_kl_coeff(step)

@@ -21,7 +21,7 @@ num_node=1
 BS=32
 total_bs=$(( $NGPU * $BS ))
 
-CHECKPOINT="../experiments/vae_softvq/airplane_bs32_20250806_140615/checkpoints/snapshot.pth"
+CHECKPOINT="../experiments/vae_softvq/airplane_bs32_20250815_231921/checkpoints/snapshot.pth"
 
 # Base training command
 BASE_CMD="python train.py --num_gpus $NGPU --resume --pretrained $CHECKPOINT"

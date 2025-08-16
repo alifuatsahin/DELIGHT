@@ -9,6 +9,28 @@ from .attention import TransformerBlock
 from .layers import ResBlock
 from utils.diffusion_helper import zero_module
 
+def timestep_embedding(timesteps, dim, max_period=10000, repeat_only=False):
+    """
+    Create sinusoidal timestep embeddings.
+    :param timesteps: a 2-D Tensor of N indices, one per batch element.
+                      These may be fractional.
+    :param dim: the dimension of the output.
+    :param max_period: controls the minimum frequency of the embeddings.
+    :return: an [B x dim x N] Tensor of positional embeddings.
+    """
+    if not repeat_only:
+        half = dim // 2
+        freqs = torch.exp(
+            -math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half
+        ).to(device=timesteps.device)
+        args = timesteps[:, None].float() * freqs[None, :, None]  # (B, half, N)
+        embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=1)
+        if dim % 2:
+            embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=1)
+    else:
+        embedding = repeat(timesteps, 'b n -> b d n', d=dim)
+    return embedding
+
 class CondSequential(nn.Sequential):
     """
     A sequential module that passes timestep embeddings or context to the children that
@@ -71,14 +93,15 @@ class BasicTransformerBlock(nn.Module):
         return x
 
 class SpatialTransformer(nn.Module):
-    def __init__(self, dim, n_heads, dim_head,
+    def __init__(self, channels, out_channels, n_heads, dim_head,
                  depth=1, dropout=0., context_dim=None, use_xformers=True):
         super().__init__()
-        self.in_channels = dim
+        self.in_channels = channels
+        self.out_channels = out_channels if out_channels is not None else channels
         inner_dim = n_heads * dim_head
-        self.norm = nn.GroupNorm(1, dim)
+        self.norm = nn.GroupNorm(1, channels)
 
-        self.proj_in = nn.Conv1d(dim,
+        self.proj_in = nn.Conv1d(channels,
                                  inner_dim,
                                  kernel_size=1)
 
@@ -87,9 +110,9 @@ class SpatialTransformer(nn.Module):
                 for _ in range(depth)]
         )
 
-        self.proj_out = zero_module(nn.Conv1d(inner_dim,
-                                              dim,
-                                              kernel_size=1))
+        self.proj_out = nn.Conv1d(inner_dim,
+                                  self.out_channels,
+                                  kernel_size=1)
 
     def forward(self, x, context=None):
         # note: if no context is given, cross-attention defaults to self-attention
@@ -99,7 +122,7 @@ class SpatialTransformer(nn.Module):
         for block in self.transformer_blocks:
             x = block(x, context=context)
         x = self.proj_out(x)
-        return x + x_in
+        return x
 
 class FiLMCond(nn.Module):
     def __init__(self, input_dim, out_dim, context_dim, weight_std=0.001, bias=0.0, *args, **kwargs):
@@ -139,11 +162,50 @@ class FiLMCond(nn.Module):
         out = g * self.layer(x) + b
         return out
 
-class FlowBase(nn.Module):
+class FlowAttn(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.depth = cfg.flow.depth
         self.num_res_blocks = cfg.flow.num_res_blocks
+        self.width = cfg.flow.width
+        self.n_heads = cfg.flow.n_heads
+        self.dim_head = cfg.flow.dim_head
+        self.e_dim = cfg.softvq.e_dim
+        self.input_dim = cfg.input_dim
+        self.latent_dim = cfg.latent_dim
+        self.t_emb_ch = cfg.flow.t_emb_ch
+        self.use_xformers = cfg.flow.use_xformers_attention
+
+        t_emb_dim = self.t_emb_ch * 2
+
+        self.time_embed = nn.Sequential(
+            nn.Conv1d(self.t_emb_ch, t_emb_dim, kernel_size=1),
+            nn.SiLU(),
+            nn.Conv1d(t_emb_dim, t_emb_dim, kernel_size=1),
+        )
+
+        self.layers = SpatialTransformer(
+            channels=self.input_dim + t_emb_dim,
+            out_channels=self.input_dim,
+            n_heads=self.n_heads,
+            dim_head=self.dim_head,
+            context_dim=self.e_dim,
+            dropout=0.0,
+            use_xformers=self.use_xformers,
+            depth=self.depth,
+        )
+
+    def forward(self, x, t, context):
+        t_emb = timestep_embedding(t, self.t_emb_ch)
+        emb = self.time_embed(t_emb)
+        h = torch.cat([x, emb], dim=1)  # Concatenate time embedding
+        h = self.layers(h, context)
+        return h
+
+class FlowBase(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.depth = cfg.flow.depth
         self.width = cfg.flow.width
         self.e_dim = cfg.softvq.e_dim
         self.input_dim = cfg.input_dim
@@ -288,25 +350,3 @@ class FlowModel(nn.Module):
             # x = torch.cat([x, hs.pop()], dim=1)
             x = module(x, emb, context)
         return self.to_out(x)
-    
-def timestep_embedding(timesteps, dim, max_period=10000, repeat_only=False):
-    """
-    Create sinusoidal timestep embeddings.
-    :param timesteps: a 2-D Tensor of N indices, one per batch element.
-                      These may be fractional.
-    :param dim: the dimension of the output.
-    :param max_period: controls the minimum frequency of the embeddings.
-    :return: an [B x dim x N] Tensor of positional embeddings.
-    """
-    if not repeat_only:
-        half = dim // 2
-        freqs = torch.exp(
-            -math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half
-        ).to(device=timesteps.device)
-        args = timesteps[:, None].float() * freqs[None, :, None]  # (B, half, N)
-        embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=1)
-        if dim % 2:
-            embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=1)
-    else:
-        embedding = repeat(timesteps, 'b n -> b d n', d=dim)
-    return embedding

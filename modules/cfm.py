@@ -10,41 +10,45 @@ import warnings
 from typing import Union
 
 import torch
-from loguru import logger
 
-from .optimal_transport import OTPlanSampler
+from .otplan import OTPlanSampler
 
 def get_CFM(cfg):
     """Get the Conditional Flow Matcher (CFM) based on the configuration."""
     if cfg.cfm_method == "independent":
-        cfg.ot_method = "none"
-        logger.info("Using independent CFM method, no OT plan sampler will be used.")
-
-    if cfg.ot_method != "none":
-        ot_sampler = OTPlanSampler(
-            method=cfg.ot_method,
-        )
-    else:
-        assert cfg.cfm_method == "independent", "OT plan sampler must be specified for CFM methods other than independent."
-        ot_sampler = None
-
-    if cfg.cfm_method == "independent":
         cfm = ConditionalFlowMatcher(sigma=cfg.sigma)
         return cfm
-    elif cfg.cfm_method == "exact_ot":
-        cfm = ExactOptimalTransportConditionalFlowMatcher(sigma=cfg.sigma, use_hybrid_coupling=cfg.use_hybrid_coupling, beta=cfg.beta)
-        cfm.ot_sampler = ot_sampler
+    elif cfg.cfm_method == "ot":
+        cfm = OptimalTransportConditionalFlowMatcher(
+            sigma=cfg.sigma, 
+            use_hybrid_coupling=cfg.use_hybrid_coupling, 
+            beta=cfg.beta,
+            p=cfg.p,
+            blur=cfg.blur
+            )
         return cfm
     elif cfg.cfm_method == "variance":
-        cfm = VariancePreservingConditionalFlowMatcher(sigma=cfg.sigma, use_hybrid_coupling=cfg.use_hybrid_coupling, beta=cfg.beta)
-        cfm.ot_sampler = ot_sampler
+        cfm = VariancePreservingConditionalFlowMatcher(
+            sigma=cfg.sigma, 
+            use_hybrid_coupling=cfg.use_hybrid_coupling, 
+            beta=cfg.beta,
+            )
         return cfm
     elif cfg.cfm_method == "target":
-        cfm = TargetConditionalFlowMatcher(sigma=cfg.sigma, use_hybrid_coupling=cfg.use_hybrid_coupling, beta=cfg.beta)
-        cfm.ot_sampler = ot_sampler
+        cfm = TargetConditionalFlowMatcher(
+            sigma=cfg.sigma, 
+            use_hybrid_coupling=cfg.use_hybrid_coupling, 
+            beta=cfg.beta
+            )
         return cfm
     elif cfg.cfm_method == "schrodinger_bridge":
-        cfm = SchrodingerBridgeConditionalFlowMatcher(sigma=cfg.sigma, ot_method=cfg.ot_method, use_hybrid_coupling=cfg.use_hybrid_coupling, beta=cfg.beta)
+        cfm = SchrodingerBridgeConditionalFlowMatcher(
+            sigma=cfg.sigma, 
+            use_hybrid_coupling=cfg.use_hybrid_coupling, 
+            beta=cfg.beta,
+            p=cfg.p,
+            blur=cfg.blur
+            )
         return cfm
     else:
         raise ValueError(f"Unknown CFM method: {cfg.cfm_method}")
@@ -54,23 +58,23 @@ def pad_t_like_x(t, x):
 
     Parameters
     ----------
-    x : Tensor, shape (bs, *dim)
+    x : Tensor, shape (B, N, D)
         represents the source minibatch
-    t : FloatTensor, shape (bs)
+    t : FloatTensor, shape (B, N)
 
     Returns
     -------
-    t : Tensor, shape (bs, number of x dimensions)
+    t : Tensor, shape (B, N, 1)
 
     Example
     -------
-    x: Tensor (bs, C, W, H)
-    t: Vector (bs)
-    pad_t_like_x(t, x): Tensor (bs, 1, 1, 1)
+    x: Tensor (B, C, W, H)
+    t: Vector (B, N)
+    pad_t_like_x(t, x): Tensor (B, N, 1, 1)
     """
     if isinstance(t, (float, int)):
         return t
-    return t.reshape(-1, *([1] * (x.dim() - 1)))
+    return t.view(*t.shape, *([1] * (x.dim() - t.dim())))
 
 
 class ConditionalFlowMatcher:
@@ -99,11 +103,11 @@ class ConditionalFlowMatcher:
 
         Parameters
         ----------
-        x0 : Tensor, shape (bs, *dim)
+        x0 : Tensor, shape (B, N, D)
             represents the source minibatch
-        x1 : Tensor, shape (bs, *dim)
+        x1 : Tensor, shape (B, N, D)
             represents the target minibatch
-        t : FloatTensor, shape (bs)
+        t : FloatTensor, shape (B, N)
 
         Returns
         -------
@@ -122,7 +126,7 @@ class ConditionalFlowMatcher:
 
         Parameters
         ----------
-        t : FloatTensor, shape (bs)
+        t : FloatTensor, shape (B, N)
 
         Returns
         -------
@@ -141,17 +145,17 @@ class ConditionalFlowMatcher:
 
         Parameters
         ----------
-        x0 : Tensor, shape (bs, *dim)
+        x0 : Tensor, shape (B, N, D)
             represents the source minibatch
-        x1 : Tensor, shape (bs, *dim)
+        x1 : Tensor, shape (B, N, D)
             represents the target minibatch
-        t : FloatTensor, shape (bs)
-        epsilon : Tensor, shape (bs, *dim)
+        t : FloatTensor, shape (B, N)
+        epsilon : Tensor, shape (B, N, D)
             noise sample from N(0, 1)
 
         Returns
         -------
-        xt : Tensor, shape (bs, *dim)
+        xt : Tensor, shape (B, N, D)
 
         References
         ----------
@@ -168,12 +172,12 @@ class ConditionalFlowMatcher:
 
         Parameters
         ----------
-        x0 : Tensor, shape (bs, *dim)
+        x0 : Tensor, shape (B, N, D)
             represents the source minibatch
-        x1 : Tensor, shape (bs, *dim)
+        x1 : Tensor, shape (B, N, D)
             represents the target minibatch
-        t : FloatTensor, shape (bs)
-        xt : Tensor, shape (bs, *dim)
+        t : FloatTensor, shape (B, N)
+        xt : Tensor, shape (B, N, D)
             represents the samples drawn from probability path pt
 
         Returns
@@ -197,11 +201,11 @@ class ConditionalFlowMatcher:
 
         Parameters
         ----------
-        x0 : Tensor, shape (bs, *dim)
+        x0 : Tensor, shape (B, N, D)
             represents the source minibatch
-        x1 : Tensor, shape (bs, *dim)
+        x1 : Tensor, shape (B, N, D)
             represents the target minibatch
-        (optionally) t : Tensor, shape (bs)
+        (optionally) t : Tensor, shape (B, N)
             represents the time levels
             if None, drawn from uniform [0,1]
         return_noise : bool
@@ -210,19 +214,19 @@ class ConditionalFlowMatcher:
 
         Returns
         -------
-        t : FloatTensor, shape (bs)
-        xt : Tensor, shape (bs, *dim)
+        t : FloatTensor, shape (B, N)
+        xt : Tensor, shape (B, N, D)
             represents the samples drawn from probability path pt
         ut : conditional vector field ut(x1|x0) = x1 - x0
-        (optionally) eps: Tensor, shape (bs, *dim) such that xt = mu_t + sigma_t * epsilon
+        (optionally) eps: Tensor, shape (B, N, D) such that xt = mu_t + sigma_t * epsilon
 
         References
         ----------
         [1] Improving and Generalizing Flow-Based Generative Models with minibatch optimal transport, Preprint, Tong et al.
         """
         if t is None:
-            t = torch.rand(x0.shape[0]).type_as(x0)
-        assert len(t) == x0.shape[0], "t has to have batch size dimension"
+            t = torch.rand(x0.shape[0], x0.shape[1], device=x0.device)
+        assert t.shape[1] == x0.shape[1], "t has to have the same dimension"
 
         eps = self.sample_noise_like(x0)
         xt = self.sample_xt(x0, x1, t, eps)
@@ -237,7 +241,7 @@ class ConditionalFlowMatcher:
 
         Parameters
         ----------
-        t : FloatTensor, shape (bs)
+        t : FloatTensor, shape (B, N)
 
         Returns
         -------
@@ -251,14 +255,14 @@ class ConditionalFlowMatcher:
         return 2 * sigma_t / (self.sigma**2 + 1e-8)
 
 
-class ExactOptimalTransportConditionalFlowMatcher(ConditionalFlowMatcher):
+class OptimalTransportConditionalFlowMatcher(ConditionalFlowMatcher):
     """Child class for optimal transport conditional flow matching method. This class implements
     the OT-CFM methods from [1] and inherits the ConditionalFlowMatcher parent class.
 
     It overrides the sample_location_and_conditional_flow.
     """
 
-    def __init__(self, sigma: Union[float, int] = 0.0, use_hybrid_coupling: bool = False, beta: float = 0.2):
+    def __init__(self, sigma: Union[float, int] = 0.0, use_hybrid_coupling: bool = False, beta: float = 0.2, blur: float = 0.0, p: int = 2):
         r"""Initialize the ConditionalFlowMatcher class. It requires the hyper-parameter $\sigma$.
 
         Parameters
@@ -267,7 +271,7 @@ class ExactOptimalTransportConditionalFlowMatcher(ConditionalFlowMatcher):
         ot_sampler: exact OT method to draw couplings (x0, x1) (see Eq.(17) [1]).
         """
         super().__init__(sigma)
-        self.ot_sampler = OTPlanSampler(method="exact")
+        self.ot_sampler = OTPlanSampler(p=p, blur=blur)
         self.use_hybrid_coupling = use_hybrid_coupling
         self.beta = beta
 
@@ -279,11 +283,11 @@ class ExactOptimalTransportConditionalFlowMatcher(ConditionalFlowMatcher):
 
         Parameters
         ----------
-        x0 : Tensor, shape (bs, *dim)
+        x0 : Tensor, shape (B, N, D)
             represents the source minibatch
-        x1 : Tensor, shape (bs, *dim)
+        x1 : Tensor, shape (B, N, D)
             represents the target minibatch
-        (optionally) t : Tensor, shape (bs)
+        (optionally) t : Tensor, shape (B, N)
             represents the time levels
             if None, drawn from uniform [0,1]
         return_noise : bool
@@ -291,11 +295,11 @@ class ExactOptimalTransportConditionalFlowMatcher(ConditionalFlowMatcher):
 
         Returns
         -------
-        t : FloatTensor, shape (bs)
-        xt : Tensor, shape (bs, *dim)
+        t : FloatTensor, shape (B, N)
+        xt : Tensor, shape (B, N, D)
             represents the samples drawn from probability path pt
         ut : conditional vector field ut(x1|x0) = x1 - x0
-        (optionally) epsilon : Tensor, shape (bs, *dim) such that xt = mu_t + sigma_t * epsilon
+        (optionally) epsilon : Tensor, shape (B, N, D) such that xt = mu_t + sigma_t * epsilon
 
         References
         ----------
@@ -317,15 +321,15 @@ class ExactOptimalTransportConditionalFlowMatcher(ConditionalFlowMatcher):
 
         Parameters
         ----------
-        x0 : Tensor, shape (bs, *dim)
+        x0 : Tensor, shape (B, N, D)
             represents the source minibatch
-        x1 : Tensor, shape (bs, *dim)
+        x1 : Tensor, shape (B, N, D)
             represents the target minibatch
-        y0 : Tensor, shape (bs) (default: None)
+        y0 : Tensor, shape (B, N) (default: None)
             represents the source label minibatch
-        y1 : Tensor, shape (bs) (default: None)
+        y1 : Tensor, shape (B, N) (default: None)
             represents the target label minibatch
-        (optionally) t : Tensor, shape (bs)
+        (optionally) t : Tensor, shape (B, N)
             represents the time levels
             if None, drawn from uniform [0,1]
         return_noise : bool
@@ -365,11 +369,11 @@ class TargetConditionalFlowMatcher(ConditionalFlowMatcher):
 
         Parameters
         ----------
-        x0 : Tensor, shape (bs, *dim)
+        x0 : Tensor, shape (B, N, D)
             represents the source minibatch
-        x1 : Tensor, shape (bs, *dim)
+        x1 : Tensor, shape (B, N, D)
             represents the target minibatch
-        t : FloatTensor, shape (bs)
+        t : FloatTensor, shape (B, N)
 
         Returns
         -------
@@ -389,7 +393,7 @@ class TargetConditionalFlowMatcher(ConditionalFlowMatcher):
 
         Parameters
         ----------
-        t : FloatTensor, shape (bs)
+        t : FloatTensor, shape (B, N)
 
         Returns
         -------
@@ -407,12 +411,12 @@ class TargetConditionalFlowMatcher(ConditionalFlowMatcher):
 
         Parameters
         ----------
-        x0 : Tensor, shape (bs, *dim)
+        x0 : Tensor, shape (B, N, D)
             represents the source minibatch
-        x1 : Tensor, shape (bs, *dim)
+        x1 : Tensor, shape (B, N, D)
             represents the target minibatch
-        t : FloatTensor, shape (bs)
-        xt : Tensor, shape (bs, *dim)
+        t : FloatTensor, shape (B, N)
+        xt : Tensor, shape (B, N, D)
             represents the samples drawn from probability path pt
 
         Returns
@@ -436,26 +440,28 @@ class SchrodingerBridgeConditionalFlowMatcher(ConditionalFlowMatcher):
     sample_location_and_conditional_flow functions.
     """
 
-    def __init__(self, sigma: Union[float, int] = 1.0, ot_method="exact", use_hybrid_coupling: bool = False, beta: float = 0.2):
+    def __init__(self, sigma: Union[float, int] = 1.0, use_hybrid_coupling: bool = False, beta: float = 0.2, blur: float = 0.05, p: int = 2):
         r"""Initialize the SchrodingerBridgeConditionalFlowMatcher class. It requires the hyper-
         parameter $\sigma$ and the entropic OT map.
 
         Parameters
         ----------
         sigma : Union[float, int]
-        ot_sampler: exact OT method to draw couplings (x0, x1) (see Eq.(17) [1]).
-            we use exact as the default as we found this to perform better
-            (more accurate and faster) in practice for reasonable batch sizes.
-            We note that as batchsize --> infinity the correct choice is the
-            sinkhorn method theoretically.
+        use_hybrid_coupling: bool
+            if True, use hybrid coupling (see NOT-SO-OPTIMAL TRANSPORT FLOWS FOR 3D POINT CLOUD GENERATION, ICML 2023, Fatras et al.)
+        beta: float
+            hybrid coupling parameter blending coefficient between OT coupling and independent coupling
+        p: int
+            the power of the norm to use for the cost matrix (default is 2 for squared Euclidean distance)
+        blur:
+            regularization parameter to use for entropic OT solver.
         """
         if sigma <= 0:
             raise ValueError(f"Sigma must be strictly positive, got {sigma}.")
         elif sigma < 1e-3:
             warnings.warn("Small sigma values may lead to numerical instability.")
         super().__init__(sigma, use_hybrid_coupling, beta)
-        self.ot_method = ot_method
-        self.ot_sampler = OTPlanSampler(method=ot_method, reg=2 * self.sigma**2)
+        self.ot_sampler = OTPlanSampler(blur=blur, p=p)
 
     def compute_sigma_t(self, t):
         """
@@ -464,7 +470,7 @@ class SchrodingerBridgeConditionalFlowMatcher(ConditionalFlowMatcher):
 
         Parameters
         ----------
-        t : FloatTensor, shape (bs)
+        t : FloatTensor, shape (B, N)
 
         Returns
         -------
@@ -484,12 +490,12 @@ class SchrodingerBridgeConditionalFlowMatcher(ConditionalFlowMatcher):
 
         Parameters
         ----------
-        x0 : Tensor, shape (bs, *dim)
+        x0 : Tensor, shape (B, N, D)
             represents the source minibatch
-        x1 : Tensor, shape (bs, *dim)
+        x1 : Tensor, shape (B, N, D)
             represents the target minibatch
-        t : FloatTensor, shape (bs)
-        xt : Tensor, shape (bs, *dim)
+        t : FloatTensor, shape (B, N)
+        xt : Tensor, shape (B, N, D)
             represents the samples drawn from probability path pt
 
         Returns
@@ -516,11 +522,11 @@ class SchrodingerBridgeConditionalFlowMatcher(ConditionalFlowMatcher):
 
         Parameters
         ----------
-        x0 : Tensor, shape (bs, *dim)
+        x0 : Tensor, shape (B, N, D)
             represents the source minibatch
-        x1 : Tensor, shape (bs, *dim)
+        x1 : Tensor, shape (B, N, D)
             represents the target minibatch
-        (optionally) t : Tensor, shape (bs)
+        (optionally) t : Tensor, shape (B, N)
             represents the time levels
             if None, drawn from uniform [0,1]
         return_noise: bool
@@ -529,11 +535,11 @@ class SchrodingerBridgeConditionalFlowMatcher(ConditionalFlowMatcher):
 
         Returns
         -------
-        t : FloatTensor, shape (bs)
-        xt : Tensor, shape (bs, *dim)
+        t : FloatTensor, shape (B, N)
+        xt : Tensor, shape (B, N, D)
             represents the samples drawn from probability path pt
         ut : conditional vector field ut(x1|x0) = x1 - x0
-        (optionally) epsilon : Tensor, shape (bs, *dim) such that xt = mu_t + sigma_t * epsilon
+        (optionally) epsilon : Tensor, shape (B, N, D) such that xt = mu_t + sigma_t * epsilon
 
         References
         ----------
@@ -555,15 +561,15 @@ class SchrodingerBridgeConditionalFlowMatcher(ConditionalFlowMatcher):
 
         Parameters
         ----------
-        x0 : Tensor, shape (bs, *dim)
+        x0 : Tensor, shape (B, N, D)
             represents the source minibatch
-        x1 : Tensor, shape (bs, *dim)
+        x1 : Tensor, shape (B, N, D)
             represents the target minibatch
-        y0 : Tensor, shape (bs) (default: None)
+        y0 : Tensor, shape (B, N) (default: None)
             represents the source label minibatch
-        y1 : Tensor, shape (bs) (default: None)
+        y1 : Tensor, shape (B, N) (default: None)
             represents the target label minibatch
-        (optionally) t : Tensor, shape (bs)
+        (optionally) t : Tensor, shape (B, N)
             represents the time levels
             if None, drawn from uniform [0,1]
         return_noise : bool
@@ -571,11 +577,11 @@ class SchrodingerBridgeConditionalFlowMatcher(ConditionalFlowMatcher):
 
         Returns
         -------
-        t : FloatTensor, shape (bs)
-        xt : Tensor, shape (bs, *dim)
+        t : FloatTensor, shape (B, N)
+        xt : Tensor, shape (B, N, D)
             represents the samples drawn from probability path pt
         ut : conditional vector field ut(x1|x0) = x1 - x0
-        (optionally) epsilon : Tensor, shape (bs, *dim) such that xt = mu_t + sigma_t * epsilon
+        (optionally) epsilon : Tensor, shape (B, N, D) such that xt = mu_t + sigma_t * epsilon
 
         References
         ----------
@@ -603,11 +609,11 @@ class VariancePreservingConditionalFlowMatcher(ConditionalFlowMatcher):
 
         Parameters
         ----------
-        x0 : Tensor, shape (bs, *dim)
+        x0 : Tensor, shape (B, N, D)
             represents the source minibatch
-        x1 : Tensor, shape (bs, *dim)
+        x1 : Tensor, shape (B, N, D)
             represents the target minibatch
-        t : FloatTensor, shape (bs)
+        t : FloatTensor, shape (B, N)
 
         Returns
         -------
@@ -628,12 +634,12 @@ class VariancePreservingConditionalFlowMatcher(ConditionalFlowMatcher):
 
         Parameters
         ----------
-        x0 : Tensor, shape (bs, *dim)
+        x0 : Tensor, shape (B, N, D)
             represents the source minibatch
-        x1 : Tensor, shape (bs, *dim)
+        x1 : Tensor, shape (B, N, D)
             represents the target minibatch
-        t : FloatTensor, shape (bs)
-        xt : Tensor, shape (bs, *dim)
+        t : FloatTensor, shape (B, N)
+        xt : Tensor, shape (B, N, D)
             represents the samples drawn from probability path pt
 
         Returns

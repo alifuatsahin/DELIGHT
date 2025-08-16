@@ -36,12 +36,12 @@ class Trainer(BaseTrainer):
         logger.info('Done init trainer @{}', self.device)
 
     def resume(self, path, eval=False):
-        ckpt = torch.load(path, weights_only=True)
+        ckpt = torch.load(path)
         if self.args.distributed:
             model_ckpt = self.add_module_prefix(ckpt['model'])
         else:
             model_ckpt = self.filter_name(ckpt['model'])
-        self.model.load_state_dict(model_ckpt['model'])
+        self.model.load_state_dict(model_ckpt)
         if not eval:
             self.optimizer.load_state_dict(ckpt['optimizer'])
             self.grad_scalar.load_state_dict(ckpt['grad_scalar'])
@@ -98,10 +98,10 @@ class Trainer(BaseTrainer):
         self.optimizer.zero_grad()
 
         tr_pts = batch['tr_points'].to(self.device)  # (B, Npoints, 3)
-        eval_pts = batch['te_points'].to(self.device)  # (B, Npoints, 3) - fallback to tr_pts if missing
+        # eval_pts = batch['te_points'].to(self.device)  # (B, Npoints, 3) - fallback to tr_pts if missing
 
         with autocast(self.device_str, enabled=True):
-            logs_dict = self.model(eval_pts, tr_pts, step=step)
+            logs_dict = self.model(tr_pts, step=step)
 
             loss = logs_dict['loss']
             lossv = loss.detach().cpu().item()

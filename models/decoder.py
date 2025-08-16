@@ -2,12 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchdiffeq  # For ODE integration
-import math
 from typing import List, Tuple, Optional, Dict, Any
 from collections import OrderedDict
-from einops import rearrange
 
-from modules.flows import FlowModel, FlowBase
+from modules.flows import FlowAttn, FlowBase
 from modules.layers import MLP, StandartGaussian
 from modules.cfm import get_CFM
     
@@ -52,6 +50,7 @@ class WeightsMLP(nn.Module):
 class Decoder(nn.Module):
     def __init__(self, cfg):
         super().__init__()
+        self.base = cfg.flow.base
         self.n_flows = cfg.flow.n_flows
         self.depth = cfg.flow.depth
         self.width = cfg.flow.width
@@ -64,7 +63,12 @@ class Decoder(nn.Module):
         # Validate configuration
         self._validate_config()
 
-        self.model = FlowBase(cfg)
+        if self.base == 'attn':
+            self.model = FlowAttn(cfg)
+        elif self.base == 'resnet':
+            self.model = FlowBase(cfg)
+        else:
+            raise ValueError(f"Unsupported flow base type: {self.base}")
         self.FM = get_CFM(cfg.flow)
 
         if cfg.point_prior_n_layers > 0:
@@ -158,7 +162,7 @@ class Decoder(nn.Module):
             method=self.solver,
         )
 
-        return traj[-1].transpose(1, 2), torch.ones(latents.shape[0], n_sampled_points, device=latents.device)
+        return traj[-1], torch.ones(latents.shape[0], n_sampled_points, device=latents.device)
 
     def forward(
         self, 
@@ -177,11 +181,7 @@ class Decoder(nn.Module):
 
         x0 = self.reparametrize(p_prior_mus, p_prior_logvars)  # Initial point cloud
 
-        xt = torch.zeros_like(x0)
-        ut = torch.zeros_like(x0)
-        t = torch.zeros(B, N, device=x0.device)
-        for i in range(B):
-            t[i], xt[i], ut[i] = self.FM.sample_location_and_conditional_flow(x0[i], p[i])
+        t, xt, ut = self.FM.sample_location_and_conditional_flow(x0, p)
 
         xt = xt.transpose(1, 2).contiguous()  # (B, C, N)
         ut = ut.transpose(1, 2).contiguous()  # (B, C, N)

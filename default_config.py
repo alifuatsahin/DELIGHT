@@ -19,13 +19,16 @@ cfg.vae.anneal_portion = 0.5  # Portion of epochs for annealing
 cfg.vae.kl_weight = 1  # KL weight for quantization loss
 
 cfg.vae.flow = CN()
+cfg.vae.flow.base = 'attn' # Base type for flow model ('attn', 'resnet')
 cfg.vae.flow.depth = 3  # Depth of the flow model
 cfg.vae.flow.t_emb_ch = 3 # Number of channels for time embedding
 cfg.vae.flow.n_flows = 2  # Number of flow priors
 cfg.vae.flow.width = 512  # Feature dimension for the flow model
+cfg.vae.flow.p = 2  # p-norm for hybrid coupling
+cfg.vae.flow.blur = 0.05  # Gaussian blur for skinhorn regularization
 cfg.vae.flow.use_hybrid_coupling = True  # Whether to use hybrid coupling
 cfg.vae.flow.beta = 0.2  # Beta for the hybrid coupling
-cfg.vae.flow.n_heads = 8 # Number of attention heads
+cfg.vae.flow.n_heads = 6 # Number of attention heads
 cfg.vae.flow.num_res_blocks = 1  # Number of residual blocks in the flow
 cfg.vae.flow.attn_depth = 1  # Depth of attention layers
 cfg.vae.flow.dim_head = 64  # Dimension of each attention head
@@ -33,7 +36,7 @@ cfg.vae.flow.cfm_method = 'exact_ot'  # Method for conditional flow matching
 cfg.vae.flow.solver = 'dopri5'  # ODE solver ('dopri5', 'rk4', etc.)
 cfg.vae.flow.atol = 1e-4  # Absolute tolerance for ODE
 cfg.vae.flow.rtol = 1e-4  # Relative tolerance for ODE
-cfg.vae.flow.sigma = 0.01  # Sigma for the flow
+cfg.vae.flow.sigma = 0.0  # Sigma for the flow
 cfg.vae.flow.use_xformers_attention = True  # Whether to use xformers for attention
 cfg.vae.flow.ot_method = 'exact'  # Method for optimal transport ('sinkhorn', 'exact', 'partial', 'unbalanced')
 
@@ -45,7 +48,7 @@ cfg.vae.softvq.learnable = True  # Whether to learn the temperature
 cfg.vae.softvq.tau_min = 0.03  # Minimum temperature
 cfg.vae.softvq.tau_max = 0.3  # Maximum temperature
 cfg.vae.softvq.tau = 0.07  # (Initial) Temperature for softmax
-cfg.vae.softvq.entropy_loss_ratio = 0.01 # Ratio for entropy loss (0.01)
+cfg.vae.softvq.entropy_loss_ratio = 0.1 # Ratio for entropy loss (0.01)
 cfg.vae.softvq.show_usage = True  # Track codebook usage
 cfg.vae.softvq.l2_norm = True  # Normalize embeddings
 
@@ -109,7 +112,7 @@ cfg.training.opt.beta2 = 0.999
 cfg.training.opt.weight_decay = 0.01
 cfg.training.opt.ema = True
 cfg.training.opt.ema_decay = 0.9999
-cfg.training.opt.scheduler = 'step'  # 'cosine_anneal', 'exponential', 'step', 'linear', 'lambda', 'cosine_anneal_nocycle'
+cfg.training.opt.scheduler = 'cosine_anneal_nocycle'  # 'cosine_anneal', 'exponential', 'step', 'linear', 'lambda', 'cosine_anneal_nocycle'
 
 # Add missing configuration
 cfg.vis = CN()

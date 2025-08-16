@@ -77,7 +77,7 @@ class BaseTrainer(ABC):
             ckpt_new[kn] = v
         return ckpt_new
 
-    def add_module_prefix(state_dict):
+    def add_module_prefix(self, state_dict):
         """Add 'module.' prefix to every key in a state dict."""
         state_dict_new = {}
         for k, v in state_dict.items():
