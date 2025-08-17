@@ -3,6 +3,7 @@ import warnings
 import numpy as np
 from geomloss import SamplesLoss
 import torch
+from loguru import logger
 
 
 class OTPlanSampler:
@@ -66,17 +67,17 @@ class OTPlanSampler:
 
         epsilon = self.blur ** self.p
 
-        T = torch.exp((F[:, :, None] + G[:, None, :] - C) / epsilon) #* (a[:, :, None] * b[:, None, :])
+        T = torch.exp((F[:, :, None] + G[:, None, :] - C) / epsilon) * (a[:, :, None] * b[:, None, :])
 
         if not torch.all(torch.isfinite(T)):
-            print("ERROR: T is not finite")
-            print(T)
-            print("Cost mean, max", C.mean(), C.max())
-            print(x0, x1)
+            logger.error("ERROR: T is not finite")
+            logger.error(T)
+            logger.error("Cost mean, max", C.mean(), C.max())
+            logger.error(x0, x1)
         if torch.abs(T.sum()) < 1e-8:
             if self.warn:
                 warnings.warn("Numerical errors in OT plan, reverting to uniform plan.")
-            T = torch.ones_like(T) / (N * M)
+            T = torch.ones_like(T) * (a[:, :, None] * b[:, None, :])
         return T
 
     def sample_map(self, pi, replace=True):
@@ -91,14 +92,14 @@ class OTPlanSampler:
 
         Returns
         -------
-        (i_s, i_j) : tuple of numpy arrays, shape ((B, N), (B, M))
+        (i_s, i_j) : tuple of numpy arrays, shape ((B, N), (B, N))
             represents the indices of source and target data samples from $\pi$
         """
         B, N, M = pi.shape
         pi_flat = pi.reshape(B, -1)
         pi_flat = pi_flat / pi_flat.sum(dim=1, keepdim=True)
         # Sample indices for each batch
-        choices = torch.multinomial(pi_flat, N, replacement=replace)  # (B, M=N)
+        choices = torch.multinomial(pi_flat, N, replacement=replace)  # (B, N)
         return torch.div(choices, M).long(), torch.remainder(choices, M).long()
 
     def sample_plan(self, x0, x1, replace=True):
@@ -133,26 +134,26 @@ class OTPlanSampler:
 
         Parameters
         ----------
-        x0 : Tensor, shape (bs, *dim)
+        x0 : Tensor, shape (B, N, D)
             represents the source minibatch
-        x1 : Tensor, shape (bs, *dim)
+        x1 : Tensor, shape (B, M, D)
             represents the target minibatch
-        y0 : Tensor, shape (bs)
+        y0 : Tensor, shape (B, N)
             represents the source label minibatch
-        y1 : Tensor, shape (bs)
+        y1 : Tensor, shape (B, M)
             represents the target label minibatch
         replace : bool
             represents sampling or without replacement from the OT plan
 
         Returns
         -------
-        x0[i] : Tensor, shape (bs, *dim)
+        x0[i] : Tensor, shape (B, N, D)
             represents the source minibatch drawn from $\pi$
-        x1[j] : Tensor, shape (bs, *dim)
+        x1[j] : Tensor, shape (B, M, D)
             represents the target minibatch drawn from $\pi$
-        y0[i] : Tensor, shape (bs, *dim)
+        y0[i] : Tensor, shape (B, N)
             represents the source label minibatch drawn from $\pi$
-        y1[j] : Tensor, shape (bs, *dim)
+        y1[j] : Tensor, shape (B, M)
             represents the target label minibatch drawn from $\pi$
         """
         B = x0.shape[0]
@@ -172,12 +173,12 @@ class OTPlanSampler:
 
         Parameters
         ----------
-        X : Tensor, (bs, times, *dim)
+        X : Tensor, (B, times, N, D)
             different populations of samples moving from the source to the target distribution.
 
         Returns
         -------
-        to_return : Tensor, (bs, times, *dim)
+        to_return : Tensor, (B, times, N, D)
             represents the OT sampled trajectories over time.
         """
         B, times, N, D = X.shape

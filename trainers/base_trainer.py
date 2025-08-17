@@ -158,7 +158,7 @@ class BaseTrainer(ABC):
                         time.time() - tic_log > 60
                 ):  # log per min
                     logger.info(
-                        f'E{epoch} iter[{idx}/{len(train_loader)}] | [Loss] {np.array(epoch_loss).mean():.2f} | '
+                        f'E{epoch} iter[{idx}/{len(train_loader)}] | [Loss] {np.array(epoch_loss).mean():.4f} | '
                         f'[exp] {cfg.save_dir} | [step] {step:5d}'
                     )
                     tic_log = time.time()
@@ -186,7 +186,7 @@ class BaseTrainer(ABC):
                 epo_time = (time.time() - tic_epo) / 60.0  # min
                 avg_time.update(epo_time)
                 logger.info(
-                    f'E{epoch} iter[{idx}/{len(train_loader)}] | [Loss] {np.array(epoch_loss).mean():.2f} | '
+                    f'E{epoch} iter[{idx}/{len(train_loader)}] | [Loss] {np.array(epoch_loss).mean():.4f} | '
                     f'[exp] {cfg.save_dir} | [step] {step:5d} | [time] {epo_time:.1f}m (~{int(avg_time.avg * (cfg.training.epochs - epoch) / 60)}h) | '
                     f'[best] {self.best_eval_epoch} {self.best_eval_score * 1e2:.3f}x1e-2'
                 )

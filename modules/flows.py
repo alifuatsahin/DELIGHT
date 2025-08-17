@@ -8,6 +8,14 @@ from einops import repeat
 from .attention import TransformerBlock
 from .layers import ResBlock
 from utils.diffusion_helper import zero_module
+from serialization import encode
+
+def serialize(pc, grid_size=0.01, depth=16, order="z"):
+    _, order, inverse = encode(pc, grid_size=grid_size, depth=depth, order=order)
+    order = order.unsqueeze(-1).expand(-1, -1, pc.shape[-1])
+    inverse = inverse.unsqueeze(-1).expand(-1, -1, pc.shape[-1])
+    return order, inverse
+
 
 def timestep_embedding(timesteps, dim, max_period=10000, repeat_only=False):
     """
@@ -78,10 +86,10 @@ class FeedForward(nn.Module):
 class BasicTransformerBlock(nn.Module):
     def __init__(self, dim, n_heads, dim_head, dropout=0., use_xformers=True, context_dim=None, gated_ff=True):
         super().__init__()
-        self.attn1 = TransformerBlock(dim, n_heads=n_heads, dim_head=dim_head, use_xformers=use_xformers)  # is a self-attention
+        self.attn1 = TransformerBlock(dim, n_heads=n_heads, dim_head=dim_head, use_xformers=use_xformers, use_pos_emb=True)  # is a self-attention
         self.ff = FeedForward(dim, dropout=dropout, glu=gated_ff)
         self.attn2 = TransformerBlock(dim, context_dim=context_dim,
-                                    heads=n_heads, dim_head=dim_head, use_xformers=use_xformers)  # is self-attn if context is none
+                                    n_heads=n_heads, dim_head=dim_head, use_xformers=use_xformers, use_pos_emb=True)  # is self-attn if context is none
         self.norm1 = nn.GroupNorm(1, dim)
         self.norm2 = nn.GroupNorm(1, dim)
         self.norm3 = nn.GroupNorm(1, dim)
@@ -124,44 +132,6 @@ class SpatialTransformer(nn.Module):
         x = self.proj_out(x)
         return x
 
-class FiLMCond(nn.Module):
-    def __init__(self, input_dim, out_dim, context_dim, weight_std=0.001, bias=0.0, *args, **kwargs):
-        super().__init__()
-        self.layer = nn.Sequential([
-            nn.Conv1d(input_dim, out_dim, kernel_size=1),
-        ])
-
-        self.gate = nn.Sequential(OrderedDict([
-            nn.Linear(context_dim, out_dim, bias=False),
-            nn.BatchNorm1d(out_dim),
-            nn.SiLU(),
-            nn.Linear(out_dim, out_dim, bias=True)
-        ]))
-
-        self.bias = nn.Sequential(OrderedDict([
-            nn.Linear(context_dim, out_dim, bias=False),
-            nn.BatchNorm1d(out_dim),
-            nn.SiLU(),
-            nn.Linear(out_dim, out_dim, bias=True)
-        ]))
-
-        with torch.no_grad():
-            self.layer[-1].weight.data.normal_(std=weight_std)
-            nn.init.constant_(self.layer[-1].bias.data, bias)
-            self.gate[-1].weight.data.normal_(std=weight_std)
-            nn.init.constant_(self.gate[-1].bias.data, bias)
-            self.bias[-1].weight.data.normal_(std=weight_std)
-            nn.init.constant_(self.bias[-1].bias.data, bias)
-
-    def forward(self, x, context):
-        if context.dim() > 2:
-            context = context.view(context.size(0), -1).contiguous()
-
-        g = torch.add(F.softplus(self.gate(context).unsqueeze(-1)), 1e-6)  # Ensure gate is positive
-        b = self.bias(context).unsqueeze(-1)
-        out = g * self.layer(x) + b
-        return out
-
 class FlowAttn(nn.Module):
     def __init__(self, cfg):
         super().__init__()
@@ -196,11 +166,14 @@ class FlowAttn(nn.Module):
         )
 
     def forward(self, x, t, context):
+        order, inverse = serialize(x)
+        x = torch.gather(x, 1, order).transpose(2, 1).contiguous()
         t_emb = timestep_embedding(t, self.t_emb_ch)
         emb = self.time_embed(t_emb)
         h = torch.cat([x, emb], dim=1)  # Concatenate time embedding
-        h = self.layers(h, context)
-        return h
+        x = self.layers(h, context)
+        x = x.transpose(2, 1).contiguous()
+        return torch.gather(x, 1, inverse)
 
 class FlowBase(nn.Module):
     def __init__(self, cfg):
@@ -237,12 +210,16 @@ class FlowBase(nn.Module):
 
     def forward(self, x, t, context):
         context = context.view(context.size(0), -1).contiguous() if context.dim() > 2 else context
+        order, inverse = serialize(x)
+        x = torch.gather(x, 1, order).transpose(2, 1).contiguous()
         t_emb = timestep_embedding(t, self.t_emb_ch)
         emb = self.time_embed(t_emb)
         h = torch.cat([x, emb], dim=1)  # Concatenate time embedding
         h = self.to_in(h)
         h = self.hidden_blocks(h, context)
-        return self.to_out(h)
+        x = self.to_out(h)
+        x = x.transpose(2, 1).contiguous()
+        return torch.gather(x, 1, inverse)
 
 class FlowModel(nn.Module):
     def __init__(self, cfg):

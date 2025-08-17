@@ -155,7 +155,7 @@ def get_opt(params, cfgopt, other_cfg=None):
     elif scheduler_type == 'cosine_anneal_nocycle':
         assert other_cfg is not None, "other_cfg required for cosine_anneal_nocycle scheduler"
         final_lr_ratio = float(getattr(cfgopt, "final_lr_ratio", 0.01))
-        start_ratio = float(getattr(cfgopt, "start_ratio", 0.2))
+        start_ratio = float(getattr(cfgopt, "start_ratio", 0.1))
         total_epoch = int(other_cfg.training.epochs)  # CRITICAL: Need total training duration
         
         eta_min = float(cfgopt.lr) * final_lr_ratio  # Minimum LR (1% of initial)
@@ -180,11 +180,6 @@ def get_opt(params, cfgopt, other_cfg=None):
 
     else:
         raise ValueError(f"Unsupported scheduler type: {scheduler_type}")
-    
-    # # Apply EMA if requested
-    # if use_ema:
-    #     from .ema import EMA
-    #     optimizer = EMA(optimizer, ema_decay=cfgopt.ema_decay)
 
     return optimizer, scheduler
 

@@ -2,8 +2,6 @@ import torch
 import torch.nn as nn
 from collections import OrderedDict
 
-from .attention import TransformerBlock
-from utils.diffusion_helper import zero_module
 
 class MLP(nn.Module):
     def __init__(

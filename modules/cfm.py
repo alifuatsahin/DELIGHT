@@ -305,10 +305,10 @@ class OptimalTransportConditionalFlowMatcher(ConditionalFlowMatcher):
         ----------
         [1] Improving and Generalizing Flow-Based Generative Models with minibatch optimal transport, Preprint, Tong et al.
         """
-        x0, x1 = self.ot_sampler.sample_plan(x0, x1)
+        x0, x1 = self.ot_sampler.sample_plan(x0, x1, replace=False)
         if self.use_hybrid_coupling:
             eps = torch.randn_like(x0)
-            x0 = math.sqrt((1 - self.beta)) * x0 + math.sqrt(self.beta) * eps
+            x0 = torch.sqrt((1 - self.beta)) * x0 + torch.sqrt(self.beta) * eps
         return super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
 
     def guided_sample_location_and_conditional_flow(
@@ -460,7 +460,7 @@ class SchrodingerBridgeConditionalFlowMatcher(ConditionalFlowMatcher):
             raise ValueError(f"Sigma must be strictly positive, got {sigma}.")
         elif sigma < 1e-3:
             warnings.warn("Small sigma values may lead to numerical instability.")
-        super().__init__(sigma, use_hybrid_coupling, beta)
+        super().__init__(sigma)
         self.ot_sampler = OTPlanSampler(blur=blur, p=p)
 
     def compute_sigma_t(self, t):
@@ -545,10 +545,10 @@ class SchrodingerBridgeConditionalFlowMatcher(ConditionalFlowMatcher):
         ----------
         [1] Improving and Generalizing Flow-Based Generative Models with minibatch optimal transport, Preprint, Tong et al.
         """
-        x0, x1 = self.ot_sampler.sample_plan(x0, x1)
+        x0, x1 = self.ot_sampler.sample_plan(x0, x1, replace=False)
         if self.use_hybrid_coupling:
             eps = torch.randn_like(x0)
-            x0 = math.sqrt((1 - self.beta)) * x0 + math.sqrt(self.beta) * eps
+            x0 = torch.sqrt((1 - self.beta)) * x0 + torch.sqrt(self.beta) * eps
         return super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
 
     def guided_sample_location_and_conditional_flow(

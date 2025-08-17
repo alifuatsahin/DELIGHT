@@ -46,8 +46,8 @@ DEFAULT_OPTS=(
     "vae.flow.cfm_method" "ot"  # Conditional Flow Matcher method ('ot', 'target', 'schrodinger_bridge', 'independent')
     "vae.flow.ot_method" "sinkhorn"  # Method for optimal transport ('sinkhorn', 'exact', 'partial', 'unbalanced')
     "vae.flow.sigma" "0.0"  # Sigma for the flow
-    "vae.flow.use_hybrid_coupling" "True"  # Whether to use hybrid coupling
-    "vae.flow.base" "resnet"  # Base type for flow model ('attn', 'resnet')
+    "vae.flow.use_hybrid_coupling" "False"  # Whether to use hybrid coupling
+    "vae.flow.base" "attn"  # Base type for flow model ('attn', 'resnet')
     "vae.flow.blur" "0.05"  # Gaussian blur for sinkhorn regularization
     "vae.softvq.entropy_loss_ratio" "0.01"  # Ratio for entropy loss (0.01)
 )

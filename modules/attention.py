@@ -4,6 +4,20 @@ from einops import rearrange
 import xformers.ops as xops
 import math
 
+class FixedPositionalEmbedding(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        inv_freq = 1. / (10000 ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer('inv_freq', inv_freq)
+
+    def forward(self, x, seq_dim=2, offset=0):
+        t = torch.arange(x.shape[seq_dim], device=x.device).type_as(self.inv_freq) + offset
+        sinusoid_inp = torch.einsum('i, j -> j i', t, self.inv_freq)
+        emb = torch.zeros(self.inv_freq.shape[0] * 2, x.shape[seq_dim], device=x.device, dtype=sinusoid_inp.dtype)
+        emb[0::2, :] = sinusoid_inp.sin()
+        emb[1::2, :] = sinusoid_inp.cos()
+        return emb[None, :, :]
+
 class GateLinearAttentionNoSilu(nn.Module):
     def __init__(self, dim, num_heads=4, hidden_dim=4*32):
         super().__init__()
@@ -86,12 +100,14 @@ class EfficientQKVAttention(nn.Module):
         return y
 
 class TransformerBlock(nn.Module):
-    def __init__(self, dim, context_dim=None, n_heads=4, dim_head=64, use_xformers=True, *args, **kwargs):
+    def __init__(self, dim, context_dim=None, n_heads=4, dim_head=64, use_xformers=True, use_pos_emb=False):
         super().__init__()
         inner_dim = dim_head * n_heads
         if context_dim is None:
             context_dim = dim
         self.heads = n_heads
+
+        self.pos_emb = FixedPositionalEmbedding(dim) if use_pos_emb else None
 
         self.to_q = nn.Conv1d(dim, inner_dim, 1)
         self.to_kv = nn.Conv1d(context_dim, 2 * inner_dim, 1)
@@ -105,6 +121,8 @@ class TransformerBlock(nn.Module):
 
     def forward(self, x, context=None):
         # x: (B, C, N)
+        pos_emb = self.pos_emb(x) if self.pos_emb else 0
+        x = x + pos_emb
         q = self.to_q(x)
         if context is None:
             context = x

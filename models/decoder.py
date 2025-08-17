@@ -148,8 +148,8 @@ class Decoder(nn.Module):
         p_prior_mus, p_prior_logvars = self.point_prior(latents.view(B, -1))
 
         # Expand prior parameters to match point dimensions
-        p_prior_mus = p_prior_mus.unsqueeze(2).expand(B, self.input_dim, n_sampled_points)
-        p_prior_logvars = p_prior_logvars.unsqueeze(2).expand(B, self.input_dim, n_sampled_points)
+        p_prior_mus = p_prior_mus.unsqueeze(1).expand(B, n_sampled_points, self.input_dim)
+        p_prior_logvars = p_prior_logvars.unsqueeze(1).expand(B, n_sampled_points, self.input_dim)
 
         x0 = self.reparametrize(p_prior_mus, p_prior_logvars)  # Initial point cloud
 
@@ -183,8 +183,8 @@ class Decoder(nn.Module):
 
         t, xt, ut = self.FM.sample_location_and_conditional_flow(x0, p)
 
-        xt = xt.transpose(1, 2).contiguous()  # (B, C, N)
-        ut = ut.transpose(1, 2).contiguous()  # (B, C, N)
+        # xt = xt.transpose(1, 2).contiguous()  # (B, C, N)
+        # ut = ut.transpose(1, 2).contiguous()  # (B, C, N)
         vt = self.model(xt, t, context=latents)
         loss = torch.mean((vt - ut) ** 2)
 
