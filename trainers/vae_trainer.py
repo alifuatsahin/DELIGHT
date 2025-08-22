@@ -98,10 +98,12 @@ class Trainer(BaseTrainer):
         self.optimizer.zero_grad()
 
         tr_pts = batch['tr_points'].to(self.device)  # (B, Npoints, 3)
-        # eval_pts = batch['te_points'].to(self.device)  # (B, Npoints, 3) - fallback to tr_pts if missing
+        superset = batch.get('superset', None)  # (B, Mpoints, 3) - None if independent CFM
+        if superset is not None:
+            superset = superset.to(self.device)
 
         with autocast(self.device_str, enabled=True):
-            logs_dict = self.model(tr_pts, step=step)
+            logs_dict = self.model(tr_pts, superset, step=step)
 
             loss = logs_dict['loss']
             lossv = loss.detach().cpu().item()

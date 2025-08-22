@@ -108,6 +108,7 @@ class TransformerBlock(nn.Module):
         self.heads = n_heads
 
         self.pos_emb = FixedPositionalEmbedding(dim) if use_pos_emb else None
+        self.c_pos_emb = FixedPositionalEmbedding(context_dim) if use_pos_emb and context_dim else None
 
         self.to_q = nn.Conv1d(dim, inner_dim, 1)
         self.to_kv = nn.Conv1d(context_dim, 2 * inner_dim, 1)
@@ -126,6 +127,9 @@ class TransformerBlock(nn.Module):
         q = self.to_q(x)
         if context is None:
             context = x
+        else:
+            c_pos_emb = self.c_pos_emb(context)
+            context = context + c_pos_emb
         kv = self.to_kv(context)
         k, v = kv.chunk(2, dim=1)
         out = self.attn(q, k, v)  # (B, C, N)

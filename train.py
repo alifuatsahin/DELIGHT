@@ -91,7 +91,7 @@ def get_args():
     parser.add_argument('--ntest', type=int, default=100,
                         help='Number of test samples for evaluation')
     parser.add_argument('--vae_checkpoint', type=str, default=None,
-                        help='Path to the VAE checkpoint for DDPM training')
+                        help='Path to the VAE checkpoint for prior training')
     parser.add_argument('--config', type=str, default=None,
                         help='Path to the config file for training or evaluation')
 
@@ -139,7 +139,7 @@ def get_args():
         config.save_dir = base_dir + eval_suffix
     else:
         # For training, create organized directory structure
-        if config.training.type == 'ddpm':
+        if config.training.type == 'prior':
             base_exp_dir = os.path.join(args.exp_root, config.training.type)
         else:
             base_exp_dir = os.path.join(args.exp_root, config.training.type + '_' + config.vae.quantizer)

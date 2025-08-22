@@ -71,7 +71,7 @@ class Trainer(BaseTrainer):
     def build_model(self):
         cfg, args = self.cfg, self.args
 
-        assert args.vae_checkpoint is not None, "VAE checkpoint must be provided for DDPM training"
+        assert args.vae_checkpoint is not None, "VAE checkpoint must be provided for prior training"
 
         if args.distributed:
             dist.barrier()

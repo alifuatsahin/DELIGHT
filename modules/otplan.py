@@ -1,10 +1,14 @@
-import warnings
-
-import numpy as np
+from pykeops.torch import LazyTensor
 from geomloss import SamplesLoss
+from serialization import encode
 import torch
+import numpy as np
 from loguru import logger
 
+def serialize(pc, grid_size=0.01, depth=16, order="z"):
+    _, order, _ = encode(pc, grid_size=grid_size, depth=depth, order=order)
+    order = order.unsqueeze(-1).expand(-1, -1, pc.shape[-1])
+    return torch.gather(pc, 1, order)
 
 class OTPlanSampler:
     """OTPlanSampler implements sampling coordinates according to an OT plan (wrt squared Euclidean
@@ -30,11 +34,12 @@ class OTPlanSampler:
         assert p in [1, 2], "Only p=1 (L1) and p=2 (L2) norms are supported."
         # ot_fn should take (a, x0, b, x1) as arguments where a, b are marginals and
         # x0, x1 are the source and target coordinates
-        self.ot_fn = SamplesLoss(loss="sinkhorn", p=p, blur=blur, potentials=True)
+        self.ot_fn = SamplesLoss(loss="sinkhorn", p=p, blur=blur, potentials=True, backend="online")
 
         self.p = p
         self.blur = blur
         self.warn = warn
+        self.orders = ["z", "hilbert", "z-trans", "hilbert-trans"]
 
     def get_map(self, x0, x1):
         """Compute the OT plan (wrt squared Euclidean cost) between a source and a target
@@ -49,36 +54,34 @@ class OTPlanSampler:
 
         Returns
         -------
-        p : numpy array, shape (B, N, M)
+        T : numpy array, shape (B, N, M)
             represents the OT plan between minibatches
         """
         B, N, D = x0.shape
         _, M, _ = x1.shape
 
-        a = torch.ones(B, N, device=x0.device) / N
-        b = torch.ones(B, M, device=x1.device) / M
+        # Encoding as batched KeOps LazyTensors:
+        x0_i = LazyTensor(x0[:, :, None, :])  # (B, N, 1, D)
+        x1_j = LazyTensor(x1[:, None, :, :])  # (B, 1, M, D)
 
+        # C Shape: (B, N, M)
         if self.p == 1:
-            C = torch.cdist(x0, x1, p=2) # Norm2(X-Y)
+            C_ij = ((x0_i - x1_j) ** 2).sum(-1).sqrt()  # (B, N, M, 1)
         else:
-            C = 0.5 * torch.cdist(x0, x1, p=2) ** 2 # (SqDist(X,Y) / IntCst(2))
+            C_ij = ((x0_i - x1_j) ** 2).sum(-1) / 2  # (B, N, M, 1)
 
-        F, G = self.ot_fn(a, x0, b, x1) # F: (B,N), G: (B,M)
-
+        F, G = self.ot_fn(x0, x1) # F: (B,N), G: (B,M)
         epsilon = self.blur ** self.p
 
-        T = torch.exp((F[:, :, None] + G[:, None, :] - C) / epsilon) * (a[:, :, None] * b[:, None, :])
+        F_i = LazyTensor(F[:, :, None, None])  # (B, N, 1, 1)
+        G_j = LazyTensor(G[:, None, :, None])  # (B, 1, M, 1)
 
-        if not torch.all(torch.isfinite(T)):
-            logger.error("ERROR: T is not finite")
-            logger.error(T)
-            logger.error("Cost mean, max", C.mean(), C.max())
-            logger.error(x0, x1)
-        if torch.abs(T.sum()) < 1e-8:
-            if self.warn:
-                warnings.warn("Numerical errors in OT plan, reverting to uniform plan.")
-            T = torch.ones_like(T) * (a[:, :, None] * b[:, None, :])
-        return T
+        T = ((F_i + G_j - C_ij) / epsilon).exp()  # (B, N, M)
+        indices = T.argmax(dim=2) # (B, N, 1)
+        indices = indices.expand(-1, -1, D) # (B, N, D)
+        x1 = torch.gather(x1, 1, indices)  # (B, N, D)
+        
+        return x0, x1
 
     def sample_map(self, pi, replace=True):
         r"""Draw source and target samples from pi  $(x,z) \sim \pi$
@@ -119,14 +122,15 @@ class OTPlanSampler:
         -------
         x0[i] : Tensor, shape (B, N, D)
             represents the source minibatch drawn from $\pi$
-        x1[j] : Tensor, shape (B, M, D)
+        x1[j] : Tensor, shape (B, N, D)
             represents the target minibatch drawn from $\pi$
         """
-        B = x0.shape[0]
-        pi = self.get_map(x0, x1)
-        i, j = self.sample_map(pi, replace=replace)
-        batch_indices = torch.arange(B, device=x0.device).unsqueeze(1).long()  # (B, 1)
-        return x0[batch_indices, i], x1[batch_indices, j]
+        # B = x0.shape[0]
+        x0, x1 = self.get_map(x0, x1)
+        # i, j = self.sample_map(pi, replace=replace)
+        # batch_indices = torch.arange(B, device=x0.device).unsqueeze(1).long()  # (B, 1)
+        # return x0[batch_indices, i], x1[batch_indices, j]
+        return x0, x1
 
     def sample_plan_with_labels(self, x0, x1, y0=None, y1=None, replace=True):
         r"""Compute the OT plan $\pi$ (wrt squared Euclidean cost) between a source and a target

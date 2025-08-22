@@ -188,8 +188,17 @@ class VAE(nn.Module):
             
         return max(min(self.min_kl_coeff + (self.max_kl_coeff - self.min_kl_coeff) * (step - constant_step) / anneal_portion, self.max_kl_coeff), self.min_kl_coeff)
 
-    def forward(self, p, step=None):
-        # p = p.transpose(1, 2)
+    def forward(self, p, g=None, step=None):
+        '''
+        Forward pass for the VAE model.
+
+            Args:
+                p: Input point cloud (B, C, N)
+                g: Superset for OT-plan (B, C, M) or None if independent flow matching
+                step: Current training step (optional)
+        '''
+        if g is None:
+            g = p
         latent, entropy_loss, info = self.encode(p)
 
         if self.anneal_kl:
@@ -204,7 +213,7 @@ class VAE(nn.Module):
         else:
             warmup = False
 
-        recont_loss, mean_weights = self.decoder(p, latent, warmup)
+        recont_loss, mean_weights = self.decoder(g, latent, warmup)
 
         output = {
             "loss": recont_loss + entropy_loss,

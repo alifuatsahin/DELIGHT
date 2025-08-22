@@ -31,10 +31,10 @@ DEFAULT_OPTS=(
     "data.num_workers" "10"
     "training.epochs" "500"
     "training.opt.lr" "1e-4"
-    "training.type" "ddpm"
-    "ddpm.loss_type" "l2"  # Loss type for training ('l1', 'l2')
-    "ddpm.beta_schedule" "linear"  # Beta schedule for diffusion process ('linear', 'cosine', 'sqrt_linear', 'sqrt')
-    "ddpm.use_xformers_attention" "True"
+    "training.type" "prior"
+    "prior.loss_type" "l2"  # Loss type for training ('l1', 'l2')
+    "prior.beta_schedule" "linear"  # Beta schedule for diffusion process ('linear', 'cosine', 'sqrt_linear', 'sqrt')
+    "prior.use_xformers_attention" "True"
 )
 
 # Combine base command with default options and any additional arguments

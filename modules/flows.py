@@ -6,8 +6,7 @@ import math
 from einops import repeat
 
 from .attention import TransformerBlock
-from .layers import ResBlock
-from utils.diffusion_helper import zero_module
+from .layers import ResBlock, AttnBlock
 from serialization import encode
 
 def serialize(pc, grid_size=0.01, depth=16, order="z"):
@@ -24,7 +23,7 @@ def timestep_embedding(timesteps, dim, max_period=10000, repeat_only=False):
                       These may be fractional.
     :param dim: the dimension of the output.
     :param max_period: controls the minimum frequency of the embeddings.
-    :return: an [B x dim x N] Tensor of positional embeddings.
+    :return: a (B, D, N) Tensor of positional embeddings.
     """
     if not repeat_only:
         half = dim // 2
@@ -45,11 +44,9 @@ class CondSequential(nn.Sequential):
     support it as an extra input.
     """
 
-    def forward(self, x, emb, context=None):
+    def forward(self, x, context):
         for layer in self:
-            if isinstance(layer, ResBlock):
-                x = layer(x, emb)
-            elif isinstance(layer, SpatialTransformer):
+            if isinstance(layer, ResBlock) or isinstance(layer, AttnBlock):
                 x = layer(x, context)
             else:
                 x = layer(x)
@@ -154,26 +151,34 @@ class FlowAttn(nn.Module):
             nn.Conv1d(t_emb_dim, t_emb_dim, kernel_size=1),
         )
 
-        self.layers = SpatialTransformer(
-            channels=self.input_dim + t_emb_dim,
-            out_channels=self.input_dim,
-            n_heads=self.n_heads,
-            dim_head=self.dim_head,
-            context_dim=self.e_dim,
-            dropout=0.0,
-            use_xformers=self.use_xformers,
-            depth=self.depth,
-        )
+        self.to_in = nn.Conv1d(self.input_dim + t_emb_dim, self.width, kernel_size=1)
+
+        layers = []
+
+        for _ in range(self.depth):
+            layers.append(AttnBlock(
+                channels=self.width,
+                emb_channels=self.e_dim,
+                dim_head=self.dim_head,
+                n_heads=self.n_heads,
+                dropout=0.0,
+                out_channels=self.width,
+                use_xformers=self.use_xformers
+            ))
+        self.hidden_blocks = CondSequential(*layers)
+
+        self.to_out = nn.Conv1d(self.width, self.input_dim, kernel_size=1)
 
     def forward(self, x, t, context):
-        order, inverse = serialize(x)
-        x = torch.gather(x, 1, order).transpose(2, 1).contiguous()
+        x = x.transpose(2, 1).contiguous()
         t_emb = timestep_embedding(t, self.t_emb_ch)
         emb = self.time_embed(t_emb)
         h = torch.cat([x, emb], dim=1)  # Concatenate time embedding
-        x = self.layers(h, context)
+        h = self.to_in(h)
+        x = self.hidden_blocks(h, context)
+        x = self.to_out(x)
         x = x.transpose(2, 1).contiguous()
-        return torch.gather(x, 1, inverse)
+        return x
 
 class FlowBase(nn.Module):
     def __init__(self, cfg):
@@ -210,8 +215,7 @@ class FlowBase(nn.Module):
 
     def forward(self, x, t, context):
         context = context.view(context.size(0), -1).contiguous() if context.dim() > 2 else context
-        order, inverse = serialize(x)
-        x = torch.gather(x, 1, order).transpose(2, 1).contiguous()
+        x = x.transpose(2, 1).contiguous()
         t_emb = timestep_embedding(t, self.t_emb_ch)
         emb = self.time_embed(t_emb)
         h = torch.cat([x, emb], dim=1)  # Concatenate time embedding
@@ -219,111 +223,4 @@ class FlowBase(nn.Module):
         h = self.hidden_blocks(h, context)
         x = self.to_out(h)
         x = x.transpose(2, 1).contiguous()
-        return torch.gather(x, 1, inverse)
-
-class FlowModel(nn.Module):
-    def __init__(self, cfg):
-        super().__init__()
-        self.depth = cfg.flow.depth
-        self.num_res_blocks = cfg.flow.num_res_blocks
-        self.width = cfg.flow.width
-        self.e_dim = cfg.softvq.e_dim
-        self.input_dim = cfg.input_dim
-
-        t_emb_dim = self.width * 2
-
-        self.time_embed = nn.Sequential(
-            nn.Linear(self.width, t_emb_dim),
-            nn.SiLU(),
-            nn.Linear(t_emb_dim, t_emb_dim),
-        )
-
-        self.to_in = nn.Sequential(
-            zero_module(nn.Conv1d(self.input_dim, self.width, 1)),
-        )
-
-        self.input_blocks = nn.ModuleList([])
-        self.output_blocks = nn.ModuleList([])
-
-        layers = []
-        layers.append(ResBlock(
-            channels=self.width,
-            emb_channels=t_emb_dim,
-            dropout=0.0,
-            out_channels=self.width,
-            use_scale_shift_norm=True
-        ))
-        layers.append(SpatialTransformer(
-            dim=self.width,
-            context_dim=self.e_dim,
-            n_heads=cfg.flow.n_heads,
-            dim_head=cfg.flow.dim_head,
-            depth=cfg.flow.attn_depth,
-            use_xformers=cfg.flow.use_xformers_attention,
-        ))
-        layers.append(ResBlock(
-            channels=self.width,
-            emb_channels=t_emb_dim,
-            dropout=0.0,
-            out_channels=self.width,
-            use_scale_shift_norm=True
-        ))
-
-        self.middle_blocks = CondSequential(*layers)
-
-        for _ in range(self.depth):
-            layers = []
-            for _ in range(self.num_res_blocks):
-                layers.append(ResBlock(
-                    channels=self.width,
-                    emb_channels=t_emb_dim,
-                    dropout=0.0,
-                    out_channels=self.width,
-                    use_scale_shift_norm=True
-                ))
-            layers.append(SpatialTransformer(
-                dim=self.width,
-                context_dim=self.e_dim,
-                n_heads=cfg.flow.n_heads,
-                dim_head=cfg.flow.dim_head,
-                depth=cfg.flow.attn_depth,
-                use_xformers=cfg.flow.use_xformers_attention,
-            ))
-            self.input_blocks.append(CondSequential(*layers))
-            for _ in range(self.num_res_blocks):
-                layers.append(ResBlock(
-                    channels=self.width,
-                    emb_channels=t_emb_dim,
-                    dropout=0.0,
-                    out_channels=self.width,
-                    use_scale_shift_norm=True
-                ))
-            layers.append(SpatialTransformer(
-                dim=self.width,
-                context_dim=self.e_dim,
-                n_heads=cfg.flow.n_heads,
-                dim_head=cfg.flow.dim_head,
-                depth=cfg.flow.attn_depth,
-                use_xformers=cfg.flow.use_xformers_attention,
-            ))
-            self.output_blocks.append(CondSequential(*layers))
-
-        self.to_out = nn.Sequential(
-            nn.BatchNorm1d(self.width),
-            nn.SiLU(),
-            zero_module(nn.Conv1d(self.width, cfg.input_dim, 1)),
-        )
-
-    def forward(self, x, t, context):
-        hs = []
-        t_emb = timestep_embedding(t, self.width).transpose(2, 1)  # (B, D, C)
-        emb = self.time_embed(t_emb)
-        x = self.to_in(x)
-        for module in self.input_blocks:
-            x = module(x, emb, context)
-            # hs.append(x)
-        x = self.middle_blocks(x, emb, context)
-        for module in self.output_blocks:
-            # x = torch.cat([x, hs.pop()], dim=1)
-            x = module(x, emb, context)
-        return self.to_out(x)
+        return x

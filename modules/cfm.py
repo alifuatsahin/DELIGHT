@@ -16,7 +16,9 @@ from .otplan import OTPlanSampler
 def get_CFM(cfg):
     """Get the Conditional Flow Matcher (CFM) based on the configuration."""
     if cfg.cfm_method == "independent":
-        cfm = ConditionalFlowMatcher(sigma=cfg.sigma)
+        cfm = ConditionalFlowMatcher(
+            sigma=cfg.sigma
+            )
         return cfm
     elif cfg.cfm_method == "ot":
         cfm = OptimalTransportConditionalFlowMatcher(
@@ -30,15 +32,11 @@ def get_CFM(cfg):
     elif cfg.cfm_method == "variance":
         cfm = VariancePreservingConditionalFlowMatcher(
             sigma=cfg.sigma, 
-            use_hybrid_coupling=cfg.use_hybrid_coupling, 
-            beta=cfg.beta,
             )
         return cfm
     elif cfg.cfm_method == "target":
         cfm = TargetConditionalFlowMatcher(
             sigma=cfg.sigma, 
-            use_hybrid_coupling=cfg.use_hybrid_coupling, 
-            beta=cfg.beta
             )
         return cfm
     elif cfg.cfm_method == "schrodinger_bridge":
@@ -305,10 +303,10 @@ class OptimalTransportConditionalFlowMatcher(ConditionalFlowMatcher):
         ----------
         [1] Improving and Generalizing Flow-Based Generative Models with minibatch optimal transport, Preprint, Tong et al.
         """
-        x0, x1 = self.ot_sampler.sample_plan(x0, x1, replace=False)
+        x0, x1 = self.ot_sampler.sample_plan(x0, x1)
         if self.use_hybrid_coupling:
             eps = torch.randn_like(x0)
-            x0 = torch.sqrt((1 - self.beta)) * x0 + torch.sqrt(self.beta) * eps
+            x0 = math.sqrt((1 - self.beta)) * x0 + math.sqrt(self.beta) * eps
         return super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
 
     def guided_sample_location_and_conditional_flow(
@@ -448,7 +446,7 @@ class SchrodingerBridgeConditionalFlowMatcher(ConditionalFlowMatcher):
         ----------
         sigma : Union[float, int]
         use_hybrid_coupling: bool
-            if True, use hybrid coupling (see NOT-SO-OPTIMAL TRANSPORT FLOWS FOR 3D POINT CLOUD GENERATION, ICML 2023, Fatras et al.)
+            if True, use hybrid coupling (see NOT-SO-OPTIMAL TRANSPORT FLOWS FOR 3D POINT CLOUD GENERATION, ICLR 2025, Fatras et al.)
         beta: float
             hybrid coupling parameter blending coefficient between OT coupling and independent coupling
         p: int
@@ -461,6 +459,8 @@ class SchrodingerBridgeConditionalFlowMatcher(ConditionalFlowMatcher):
         elif sigma < 1e-3:
             warnings.warn("Small sigma values may lead to numerical instability.")
         super().__init__(sigma)
+        self.use_hybrid_coupling = use_hybrid_coupling
+        self.beta = beta
         self.ot_sampler = OTPlanSampler(blur=blur, p=p)
 
     def compute_sigma_t(self, t):
@@ -548,7 +548,7 @@ class SchrodingerBridgeConditionalFlowMatcher(ConditionalFlowMatcher):
         x0, x1 = self.ot_sampler.sample_plan(x0, x1, replace=False)
         if self.use_hybrid_coupling:
             eps = torch.randn_like(x0)
-            x0 = torch.sqrt((1 - self.beta)) * x0 + torch.sqrt(self.beta) * eps
+            x0 = math.sqrt((1 - self.beta)) * x0 + math.sqrt(self.beta) * eps
         return super().sample_location_and_conditional_flow(x0, x1, t, return_noise)
 
     def guided_sample_location_and_conditional_flow(

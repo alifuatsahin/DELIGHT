@@ -120,7 +120,7 @@ def get_opt(params, cfgopt, other_cfg=None):
         
     elif scheduler_type == 'step':
         step_size = int(getattr(cfgopt, "step_epoch", 50))
-        decay = float(getattr(cfgopt, "step_decay", 0.6))
+        decay = float(getattr(cfgopt, "step_decay", 0.8))
         scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=decay)
         
     elif scheduler_type == 'linear':
@@ -154,7 +154,7 @@ def get_opt(params, cfgopt, other_cfg=None):
 
     elif scheduler_type == 'cosine_anneal_nocycle':
         assert other_cfg is not None, "other_cfg required for cosine_anneal_nocycle scheduler"
-        final_lr_ratio = float(getattr(cfgopt, "final_lr_ratio", 0.01))
+        final_lr_ratio = float(getattr(cfgopt, "final_lr_ratio", 0.1))
         start_ratio = float(getattr(cfgopt, "start_ratio", 0.1))
         total_epoch = int(other_cfg.training.epochs)  # CRITICAL: Need total training duration
         

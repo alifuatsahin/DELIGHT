@@ -145,9 +145,7 @@ class PVConv(nn.Module):
             voxel_layers.append(SE3d(out_channels))
         self.voxel_layers = nn.Sequential(*voxel_layers)
         if attention:
-            # self.attn = LinearAttention(out_channels, verbose=verbose)
-            # self.attn = GateLinearAttentionNoSilu(out_channels)
-            self.attn = TransformerBlock(out_channels, dim_head=32)
+            self.attn = TransformerBlock(out_channels, dim_head=64)
         else:
             self.attn = None
         if add_point_feat:
@@ -257,8 +255,6 @@ class PointNetSAModule(nn.Module):
                 BallQuery(radius=_radius, num_neighbors=_num_neighbors, 
                     include_coordinates=include_coordinates)
             )
-            # logger.info('create MLP: in_channel={}, out_channels={}',
-            #        in_channels + (3 if include_coordinates else 0),_out_channels)
             mlps.append(
                 SharedMLP(in_channels=in_channels + (3 if include_coordinates else 0) ,
                           out_channels=_out_channels, dim=2)
@@ -339,7 +335,7 @@ def create_pointnet2_sa_components(sa_blocks, extra_feature_channels,
 
                 if c == 0:
                     sa_blocks.append(block(in_channels, out_channels))
-                elif k ==0:
+                elif k == 0:
                     sa_blocks.append(block(in_channels+embed_dim*has_temb, out_channels))
                 in_channels = out_channels
                 k += 1

@@ -8,7 +8,7 @@ import numpy as np
 from loguru import logger
 import torch.distributed as dist
 
-from datasets.dataset import get_data_loaders
+from datasets import get_data_loaders
 from utils.utils import AverageMeter
 from utils.vis_helper import visualize_point_clouds_3d
 from utils.data_helper import normalize_point_clouds
@@ -104,7 +104,13 @@ class BaseTrainer(ABC):
 
     def build_data(self):
         logger.info('Building data loader...')
-        loaders = get_data_loaders(self.cfg.data, self.args)
+        if self.cfg.training.type == 'vae' and (self.cfg.vae.flow.cfm_method == 'ot' or self.cfg.vae.flow.cfm_method == 'schrodinger_bridge'):
+            return_superset = True
+        elif self.cfg.training.type == 'prior' and (self.cfg.prior.type == 'ot' or self.cfg.prior.type == 'schrodinger_bridge'):
+            return_superset = True
+        else:
+            return_superset = False
+        loaders = get_data_loaders(self.cfg.data, self.args, return_superset=return_superset)
         train_loader = loaders['train_loader']
         test_loader = loaders['test_loader']
 
@@ -216,7 +222,7 @@ class BaseTrainer(ABC):
             logger.info(f'Best eval score: {self.best_eval_score * 1e2:.3f}x1e-2 at epoch {self.best_eval_epoch}')
             self.writer.close() if hasattr(self, 'writer') else None
 
-        if self.cfg.training.type == 'ddpm':
+        if self.cfg.training.type == 'prior':
             logger.info('Starting evaluation of generation...')
             self.model.eval()
             self.eval_sample(step)

@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from modules.pvcnn2 import PointNetSAModule
+from serialization import encode
 
 class Quantizer(nn.Module):
     def __init__(self, cfg, input_dim):
@@ -16,8 +17,6 @@ class Quantizer(nn.Module):
 
         self.num_codebooks = cfg.softvq.num_codebooks
         self.learnable = cfg.softvq.learnable
-        self.tau_min = cfg.softvq.tau_min
-        self.tau_max = cfg.softvq.tau_max
         self.initial_tau = cfg.softvq.tau
         if self.learnable:
             self.log_tau = nn.Parameter(
@@ -50,7 +49,7 @@ class Quantizer(nn.Module):
     @property
     def tau(self):
         if self.learnable:
-            return torch.clamp(torch.exp(self.log_tau), min=self.tau_min, max=self.tau_max)  # Ensure tau is positive and bounded
+            return torch.exp(self.log_tau)
         else:
             return self.initial_tau
 
@@ -59,8 +58,10 @@ class Quantizer(nn.Module):
         Args:
             z: Input tensor.
         """
-        features, _, _ = self.pre_quant_layer((features, xyz, None))  # Project input to codebook size
+        features, center_xyz, _ = self.pre_quant_layer((features, xyz, None))  # Project input to codebook size
         z = features.transpose(1, 2).contiguous()  # (B, D, N) -> (B, N, D)
+        _, order, _ = encode(center_xyz.transpose(1, 2).contiguous())
+        z = torch.gather(z, 1, order.unsqueeze(-1).expand(-1, -1, z.size(-1)))  # Reorder z based on encode order
 
         # Handle different input shapes
         if z.dim() == 4:
