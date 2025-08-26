@@ -154,7 +154,7 @@ def get_opt(params, cfgopt, other_cfg=None):
 
     elif scheduler_type == 'cosine_anneal_nocycle':
         assert other_cfg is not None, "other_cfg required for cosine_anneal_nocycle scheduler"
-        final_lr_ratio = float(getattr(cfgopt, "final_lr_ratio", 0.1))
+        final_lr_ratio = float(getattr(cfgopt, "final_lr_ratio", 0.075))
         start_ratio = float(getattr(cfgopt, "start_ratio", 0.1))
         total_epoch = int(other_cfg.training.epochs)  # CRITICAL: Need total training duration
         
@@ -182,6 +182,10 @@ def get_opt(params, cfgopt, other_cfg=None):
         raise ValueError(f"Unsupported scheduler type: {scheduler_type}")
 
     return optimizer, scheduler
+
+def requires_grad(model, requires_grad=True):
+    for p in model.parameters():
+        p.requires_grad = requires_grad
 
 def init_processes(global_rank, size, args):
     # Set device and initialize process group

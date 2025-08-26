@@ -1,5 +1,6 @@
-from models import VAE, DDPM
+from models import VAE, Prior
 from .base_trainer import BaseTrainer
+from utils.ema import EMA
 
 import torch
 import torch.nn as nn
@@ -36,7 +37,7 @@ class Trainer(BaseTrainer):
         logger.info('done init trainer @{}', self.device)
 
     def resume(self, path, eval=False):
-        ckpt = torch.load(path, weights_only=True)
+        ckpt = torch.load(path)
         ckpt = self.filter_name(ckpt)
         self.model.load_state_dict(ckpt['model'])
         self.vae.load_state_dict(ckpt['vae'])
@@ -76,26 +77,28 @@ class Trainer(BaseTrainer):
         if args.distributed:
             dist.barrier()
 
-        self.vae = VAE(cfg).eval().to(self.device)  # Use eval mode for VAE during training
-        ckpt = torch.load(args.vae_checkpoint, weights_only=True)
+        self.vae = VAE(cfg).to(self.device)  # Use eval mode for VAE during training
+        ckpt = torch.load(args.vae_checkpoint)
         vae_ckpt = self.filter_name(ckpt['model'])
         self.vae.load_state_dict(vae_ckpt)
 
         if 'ema' in ckpt.keys():
-            ema_state_dict = {}
-            for k, v in ckpt['ema'].items():
-                # Only copy keys that match model parameters
-                if k in dict(self.vae.named_parameters()):
-                    ema_state_dict[k] = v
-            self.vae.load_state_dict(ema_state_dict, strict=False)
+            ema_vae = EMA(self.vae)
+            ema_ckpt = self.filter_name(ckpt['ema'])
+            ema_vae.load_state_dict(ema_ckpt)
+            ema_vae.copy_to(self.vae)
 
-        self.model = DDPM(cfg).to(self.device)
+        self.vae.eval()  # Set VAE to eval mode
+        utils.requires_grad(self.vae, False)  # Freeze VAE weights
+
+        self.model = Prior(cfg).to(self.device)
+
+        logger.info('Model initialized with num parameters: {}', sum(p.numel() for p in self.model.parameters()))
         
         if args.distributed:
             self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[args.local_rank], output_device=args.local_rank)
         
         if self.use_ema:
-            from utils.ema import EMA
             self.ema = EMA(self.model, decay=cfg.training.opt.ema_decay)
             logger.info('Using EMA with decay={}', cfg.training.opt.ema_decay)
     
@@ -108,8 +111,7 @@ class Trainer(BaseTrainer):
         self.optimizer.zero_grad()
 
         tr_pts = batch['tr_points'].to(self.device)  # (B, Npoints, 3)
-        with torch.no_grad():
-            latent, _, _ = self.vae.encode(tr_pts)
+        latent, _, _ = self.vae.encode(tr_pts)
 
         with autocast(self.device_str, enabled=True):
             loss, logs_dict = self.model(latent)
@@ -119,6 +121,9 @@ class Trainer(BaseTrainer):
         self.grad_scalar.scale(loss).backward()
         self.grad_scalar.step(self.optimizer)
         self.grad_scalar.update()
+
+        if self.use_ema and self.args.global_rank == 0:
+            self.ema(self.model)
 
         # Log metrics efficiently
         if self.writer is not None and step is not None:
@@ -144,12 +149,12 @@ class Trainer(BaseTrainer):
 
                 # Decode the latents using the VAE
                 samples, labels = self.vae.decode(latents, n_sampled_points=n_sampled_points)
-                output = samples.permute(0, 2, 1).contiguous()  # B3N->BN3
+                # output = samples.permute(0, 2, 1).contiguous()  # B3N->BN3
             finally:
                 if was_training:
                     self.model.train()
 
-        return output, labels
+        return samples, labels
 
     @torch.no_grad()
     def eval(self, x):
@@ -158,10 +163,9 @@ class Trainer(BaseTrainer):
         
         Args:
             x: input point clouds
-            use_ema: whether to use EMA weights
         """
         # For reconstruction evaluation, typically use current weights to measure training progress
         samples, labels = self.vae.recont(x)
-        samples = samples.permute(0, 2, 1).contiguous() # B3N -> BN3
+        # samples = samples.permute(0, 2, 1).contiguous() # B3N -> BN3
 
         return samples, labels

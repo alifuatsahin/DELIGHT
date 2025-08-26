@@ -1,98 +1,84 @@
-# from models import VAE, DDPM
-# from default_config import cfg
-
-from geomloss import SamplesLoss
-from pykeops.torch import LazyTensor
-from geomloss.utils import squared_distances
-from utils.eval_metrics import distChamferCUDAnograd
-import os
-
-import time
+from models import VAE, Prior
+from utils.ema import EMA
+from utils import utils
+from default_config import cfg as config
 import torch
+import os
+from loguru import logger
+import time
+import matplotlib.pyplot as plt
+
+def add_module_prefix(state_dict):
+    """Add 'module.' prefix to every key in a state dict."""
+    state_dict_new = {}
+    for k, v in state_dict.items():
+        # Avoid double prefixing if already present
+        if not k.startswith('module.'):
+            kn = 'module.' + k
+        else:
+            kn = k
+        state_dict_new[kn] = v
+    return state_dict_new
+
+def filter_name(ckpt):
+    ckpt_new = {}
+    for k, v in ckpt.items():
+        if k[:7] == 'module.':
+            kn = k[7:]
+        elif k[:13] == 'model.module.':
+            kn = k[13:]
+        elif k[:6] == 'module':
+            kn = k[6:]
+        else:
+            kn = k
+        ckpt_new[kn] = v
+    return ckpt_new
+
+def plot_pcs(pcs, out_dir="plots"):
+    os.makedirs(out_dir, exist_ok=True)
+    for i, pc in enumerate(pcs):
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        ax.scatter(pc[:, 0], pc[:, 1], pc[:, 2], s=1, c='r')
+        ax.set_title(f"Sample {i+1}")
+        plt.axis('off')
+        plt.savefig(os.path.join(out_dir, f"sample_{i+1}.png"))
+        plt.close(fig)
 
 if __name__ == "__main__":
-    pc = torch.randn(32, 2048, 3)  # Example point cloud
-    pc2 = torch.randn(32, 2048, 3)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    path = '../experiments/prior/airplane_bs32_20250826_042427/checkpoints/snapshot.pth'
+    config_path = os.path.dirname(path) + '/../config.yml'
+    config.merge_from_file(config_path)
+    vae = VAE(cfg=config).to(device)
+    ckpt = torch.load(path)
+    vae.load_state_dict(filter_name(ckpt['vae']))
+    vae.eval()  # Set VAE to eval mode
+    utils.requires_grad(vae, False)  # Freeze VAE weights
 
-    loss = SamplesLoss(blur=0.05, p=2, potentials=True, backend="online")
-    start_time = time.time()
+    prior = Prior(cfg=config).to(device)
+    prior.load_state_dict(filter_name(ckpt['model']))
+    if 'ema' in ckpt.keys():
+        ema_prior = EMA(prior)
+        ema_ckpt = filter_name(ckpt['ema'])
+        ema_prior.load_state_dict(ema_ckpt)
+        ema_prior.copy_to(prior)
 
-    with torch.autograd.profiler.profile(use_cuda=True) as prof:
-        F, G = loss(pc, pc2)
-        print("F shape:", F.shape)
-        print("G shape:", G.shape)
+    prior.eval()  # Set Prior to eval mode
+    utils.requires_grad(prior, False)  # Freeze Prior weights
 
-        epsilon = 0.05 ** 2
+    logger.info("Starting evaluation...")
+    sample_points = [2048, 8192, 15000, 100000]
+    plots = []
+    batch_size = 10
 
-        # Encoding as batched KeOps LazyTensors:
-        x_i = LazyTensor(pc[:, :, None, :])  # (B, N, 1, D)
-        y_j = LazyTensor(pc2[:, None, :, :])  # (B, 1, M, D)
+    # Start evaluation
+    for n_sampled_points in sample_points:
+        start_time = time.time()
+        sample = prior.sample(batch_size=batch_size)
+        output, _ = vae.decoder.decode(sample, n_sampled_points=n_sampled_points)
+        elapsed_time = time.time() - start_time
+        plots.append(output[-1].cpu().detach())
+        logger.info(f"Evaluation completed for {n_sampled_points} points in {elapsed_time/batch_size:.2f} seconds.")
 
-        # Cost matrix:
-        C_ij = ((x_i - y_j) ** 2).sum(-1) / 2  # (B, N, M, 1)
-        F_i = LazyTensor(F[:, :, None, None])  # (B, N, 1, 1)
-        G_j = LazyTensor(G[:, None, :, None])  # (B, 1, M, 1)
-
-        T = ((F_i + G_j - C_ij) / epsilon).exp() # (B, N, M, 1)
-
-        print(f"x1_j shape: {y_j.shape}")
-
-        num = (T * y_j).sum(dim=2)  # (B, N, D)
-
-        print(f"T shape: {T.shape}")
-
-        print(f"num shape: {num.shape}")
-
-        den = T.sum(dim=2)  # (B, N, 1)
-
-        print(f"den shape: {den.shape}")
-
-        y_hat = (num / den.clamp_min(1e-12))
-
-        print("y_hat shape:", y_hat.shape)
-
-        dl, dr = distChamferCUDAnograd(y_hat, pc2)
-
-        print("Chamfer distance:", (dl.mean(dim=1) + dr.mean(dim=1)).mean())
-
-    print(prof.key_averages().table(sort_by="cuda_time_total"))
-    # print(T)
-    # print(matched_pc2.shape)
-    # print(type(matched_pc2))
-    print("Time taken:", time.time() - start_time)
-
-    # grid_size = 0.01
-    # depth = 16
-    # order = "z"
-
-    # # Encode
-    # code, order_pc, inverse = encode(pc, grid_size=grid_size, depth=depth, order=order)
-    # print("Encoded max index:", order_pc.max(1))
-    # print("Encoded min index:", order_pc.min(1))
-
-    # # Decode
-    # decoded_pc, batch = decode(code.view(-1), depth=depth, order=order)
-    # print("Decoded successfully")
-
-    # # Recompute quantized grid coordinates for comparison
-    # grid_coord = torch.div(
-    #     pc - pc.min(1, keepdim=True)[0], 0.01, rounding_mode="trunc"
-    # ).int().view(-1, 3)
-
-    # # Compare decoded_grid to grid_coord
-    # decoded_flat = decoded_pc.view(-1, 3)
-    # assert torch.all(decoded_flat == grid_coord), "Decoded grid does not match quantized input!"
-
-    # order_pc_expanded = order_pc.unsqueeze(-1).expand(-1, -1, pc.shape[-1])
-    # inverse_pc_expanded = inverse.unsqueeze(-1).expand(-1, -1, pc.shape[-1])
-    # # Order pointcloud
-    # pc_ordered = torch.gather(pc, 1, order_pc_expanded)
-
-    # # Inverse it and check if its correct
-    # pc_reverted = torch.gather(pc_ordered, 1, inverse_pc_expanded)
-    # assert torch.all(pc_reverted == pc), "Inverse ordering does not match original point cloud!"
-
-    # print("Round-trip test passed!")
-
-    # assert torch.unique(code).numel() == code.numel(), "Codes are not unique!"
-    # print("Uniqueness test passed!")
+    plot_pcs(plots)

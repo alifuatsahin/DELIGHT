@@ -72,6 +72,8 @@ class BaseTrainer(ABC):
                 kn = k[7:]
             elif k[:13] == 'model.module.':
                 kn = k[13:]
+            elif k[:6] == 'module':
+                kn = k[6:]
             else:
                 kn = k
             ckpt_new[kn] = v
@@ -105,8 +107,6 @@ class BaseTrainer(ABC):
     def build_data(self):
         logger.info('Building data loader...')
         if self.cfg.training.type == 'vae' and (self.cfg.vae.flow.cfm_method == 'ot' or self.cfg.vae.flow.cfm_method == 'schrodinger_bridge'):
-            return_superset = True
-        elif self.cfg.training.type == 'prior' and (self.cfg.prior.type == 'ot' or self.cfg.prior.type == 'schrodinger_bridge'):
             return_superset = True
         else:
             return_superset = False

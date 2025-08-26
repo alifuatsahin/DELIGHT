@@ -15,7 +15,7 @@ export TF_CPP_MIN_LOG_LEVEL=3
 export TF_ENABLE_ONEDNN_OPTS=0
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
-CKPT="../experiments/vae_softvq/airplane_bs32_20250805_215648/checkpoints/best_eval.pth"
+CKPT="../experiments/vae_softvq/airplane_bs32_20250825_033802/checkpoints/best_eval.pth"
 NGPU=2 # 
 num_node=1
 BS=32
@@ -29,12 +29,15 @@ DEFAULT_OPTS=(
     "--opt"
     "data.batch_size" "$BS"
     "data.num_workers" "10"
-    "training.epochs" "500"
+    "training.epochs" "600"
     "training.opt.lr" "1e-4"
     "training.type" "prior"
-    "prior.loss_type" "l2"  # Loss type for training ('l1', 'l2')
-    "prior.beta_schedule" "linear"  # Beta schedule for diffusion process ('linear', 'cosine', 'sqrt_linear', 'sqrt')
-    "prior.use_xformers_attention" "True"
+    "prior.depth" "4"
+    "prior.width" "512"  # Feature dimension for the flow model
+    "vis.vis_freq" "-50"
+    "vis.save_freq" "50"
+    "vis.val_freq" "25"
+    "vis.save_time" "30"  # minutes
 )
 
 # Combine base command with default options and any additional arguments

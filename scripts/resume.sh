@@ -15,7 +15,6 @@ export TF_CPP_MIN_LOG_LEVEL=3
 export TF_ENABLE_ONEDNN_OPTS=0
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
-DATA="airplane" # Default category, can be overridden by command line argument
 NGPU=2 # 
 num_node=1
 BS=32
@@ -33,7 +32,6 @@ echo "========================================="
 echo "DELIGHT Training Script"
 echo "========================================="
 echo "Number of GPUs: $NGPU"
-echo "Category: $DATA"
 echo "Batch size per GPU: $BS"
 echo "Total batch size: $total_bs"
 echo "Number of nodes: $num_node"

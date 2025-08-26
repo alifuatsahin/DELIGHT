@@ -53,7 +53,7 @@ class Quantizer(nn.Module):
             kl_loss: Computed KL divergence loss.
         """
         kl_loss = -0.5 * torch.sum(1 + logvars - mus.pow(2) - logvars.exp(), dim=1).mean()
-        return kl_loss / 1e4
+        return kl_loss / 2e4
     
     @torch.no_grad()
     def sample(self, batch_size, device):

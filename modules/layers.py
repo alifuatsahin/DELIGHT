@@ -81,7 +81,7 @@ class StandartGaussian(nn.Module):
         out = torch.zeros(features.shape[0], self.out_features, device=features.device)
         return out, out
 
-class ResBlock(nn.Module):
+class CondResBlock(nn.Module):
     def __init__(
         self,
         channels,
@@ -137,6 +137,34 @@ class ResBlock(nn.Module):
             h = self.out_layers(h)
         return self.skip_connection(x) + h
     
+class ResBlock(nn.Module):
+    def __init__(
+        self,
+        channels,
+        dropout=0.0,
+        out_channels=None,
+    ):
+        super().__init__()
+        self.channels = channels
+        self.dropout = dropout
+        self.out_channels = out_channels or channels
+
+        self.layers = nn.Sequential(
+            nn.BatchNorm1d(channels),
+            nn.SiLU(),
+            nn.Dropout(p=dropout),
+            nn.Conv1d(channels, self.out_channels, 1),
+        )
+
+        if self.out_channels == channels:
+            self.skip_connection = nn.Identity()
+        else:
+            self.skip_connection = nn.Conv1d(channels, self.out_channels, 1)
+
+    def forward(self, x):
+        h = self.layers(x)
+        return self.skip_connection(x) + h
+    
 class AttnBlock(nn.Module):
     def __init__(
         self,
@@ -167,7 +195,7 @@ class AttnBlock(nn.Module):
             n_heads=n_heads,
             dim_head=dim_head,
             use_xformers=self.use_xformers,
-            use_pos_emb=True
+            use_pos_emb=False
         )
 
         self.out_norm = nn.BatchNorm1d(self.out_channels)

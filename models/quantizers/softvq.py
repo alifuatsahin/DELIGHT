@@ -46,6 +46,8 @@ class Quantizer(nn.Module):
         if self.show_usage:
             self.register_buffer("codebook_used", torch.zeros(self.num_codebooks, 65536))
 
+        self.orders = ["z", "hilbert", "hilbert-trans", "z-trans"]
+
     @property
     def tau(self):
         if self.learnable:
@@ -60,7 +62,8 @@ class Quantizer(nn.Module):
         """
         features, center_xyz, _ = self.pre_quant_layer((features, xyz, None))  # Project input to codebook size
         z = features.transpose(1, 2).contiguous()  # (B, D, N) -> (B, N, D)
-        _, order, _ = encode(center_xyz.transpose(1, 2).contiguous())
+        idx = torch.randint(len(self.orders), (1,)).item()
+        _, order, _ = encode(center_xyz.transpose(1, 2).contiguous(), order=self.orders[idx])
         z = torch.gather(z, 1, order.unsqueeze(-1).expand(-1, -1, z.size(-1)))  # Reorder z based on encode order
 
         # Handle different input shapes

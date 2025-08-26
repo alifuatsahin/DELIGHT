@@ -183,8 +183,6 @@ class Decoder(nn.Module):
 
         t, xt, ut = self.FM.sample_location_and_conditional_flow(x0, p)
 
-        # xt = xt.transpose(1, 2).contiguous()  # (B, C, N)
-        # ut = ut.transpose(1, 2).contiguous()  # (B, C, N)
         vt = self.model(xt, t, context=latents)
         loss = torch.mean((vt - ut) ** 2)
 

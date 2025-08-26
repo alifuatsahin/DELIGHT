@@ -29,7 +29,7 @@ DEFAULT_OPTS=(
     "--opt"
     "data.batch_size" "$BS"
     "data.num_workers" "10"
-    "training.epochs" "600"
+    "training.epochs" "800"
     "training.opt.lr" "1e-4"
     "vae.latent_dim" "1024"
     "data.n_sample_points" "2048"
@@ -47,13 +47,12 @@ DEFAULT_OPTS=(
     "vae.flow.ot_method" "sinkhorn"  # Method for optimal transport ('sinkhorn', 'exact', 'partial', 'unbalanced')
     "vae.flow.sigma" "0.0"  # Sigma for the flow
     "vae.flow.use_hybrid_coupling" "True"  # Whether to use hybrid coupling
-    "vae.flow.base" "resnet"  # Base type for flow model ('attn', 'resnet')
+    "vae.flow.base" "attn"  # Base type for flow model ('attn', 'resnet')
     "vae.flow.blur" "0.05"  # Gaussian blur for sinkhorn regularization
-    "vae.softvq.entropy_loss_ratio" "0.02"  # Ratio for entropy loss (0.01)
+    "vae.softvq.entropy_loss_ratio" "0.01"  # Ratio for entropy loss (0.01)
     "training.opt.scheduler" "cosine_anneal_nocycle"  # 'cosine_anneal', 'exponential', 'step', 'linear', 'lambda', 'cosine_anneal_nocycle'
     "vae.flow.depth" "4"  # Depth of the flow model
     "vae.softvq.learnable" "False"  # Whether to learn the temperature
-    "vae.kl_weight" "0.5"  # KL weight for quantization loss
 )
 
 # Combine base command with default options and any additional arguments

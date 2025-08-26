@@ -3,7 +3,7 @@
 # SLURM Options
 #SBATCH -o delight.out-%j
 #SBATCH -c 10
-#SBATCH --gres=gpu:volta:2
+#SBATCH --gres=gpu:volta:1
 
 source /etc/profile
 module load anaconda/Python-ML-2025a

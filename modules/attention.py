@@ -91,7 +91,7 @@ class EfficientQKVAttention(nn.Module):
         _, _, M = k.shape
         assert C % self.n_heads == 0
         ch = C // self.n_heads
-        q = q.reshape(B, self.n_heads, ch, N).permute(0, 3, 1, 2).contiguous()  # [B, D, n_heads, ch]
+        q = q.reshape(B, self.n_heads, ch, N).permute(0, 3, 1, 2).contiguous()  # [B, N, n_heads, ch]
         k = k.reshape(B, self.n_heads, ch, M).permute(0, 3, 1, 2).contiguous()
         v = v.reshape(B, self.n_heads, ch, M).permute(0, 3, 1, 2).contiguous()
         scale = 1 / math.sqrt(ch)
@@ -128,7 +128,7 @@ class TransformerBlock(nn.Module):
         if context is None:
             context = x
         else:
-            c_pos_emb = self.c_pos_emb(context)
+            c_pos_emb = self.c_pos_emb(context) if self.c_pos_emb else 0
             context = context + c_pos_emb
         kv = self.to_kv(context)
         k, v = kv.chunk(2, dim=1)
