@@ -425,14 +425,10 @@ class BaseTrainer(ABC):
             s = batch['std']
             ref_mean_pcs.append(m)
             ref_std_pcs.append(s)
-        
-        # Concatenate all samples and normalization data
-        gen_pcs = torch.cat(gen_pcs, dim=0)[:num_samples]
-        ref_pcs = torch.cat(ref_pcs, dim=0)[:num_samples]
-        labels_list = torch.cat(labels_list, dim=0)[:num_samples]
-        ref_mean_pcs = torch.cat(ref_mean_pcs, dim=0)[:num_samples]
-        ref_std_pcs = torch.cat(ref_std_pcs, dim=0)[:num_samples]
-        
+
+        gen_pcs = torch.cat(gen_pcs, dim=0)
+        labels_list = torch.cat(labels_list, dim=0)
+
         # Handle distributed training
         if self.args.distributed:
             gen_pcs = gen_pcs.to(device)
@@ -447,6 +443,13 @@ class BaseTrainer(ABC):
             labels_list = torch.cat(labels_list_gathered, dim=0).cpu()
             
             logger.info(f'After gather: {gen_pcs.shape}, rank={self.args.global_rank}')
+        
+        # Concatenate all samples and normalization data
+        gen_pcs = gen_pcs[:num_samples]
+        ref_pcs = torch.cat(ref_pcs, dim=0)[:num_samples]
+        labels_list = labels_list[:num_samples]
+        ref_mean_pcs = torch.cat(ref_mean_pcs, dim=0)[:num_samples]
+        ref_std_pcs = torch.cat(ref_std_pcs, dim=0)[:num_samples]
         
         # Only rank 0 does evaluation and saves results
         if self.args.global_rank != 0:

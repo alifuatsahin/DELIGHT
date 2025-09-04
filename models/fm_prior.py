@@ -30,7 +30,7 @@ class Prior(nn.Module):
         x0 = torch.randn(batch_size, self.seq_len, self.e_dim, device=self.device)
 
         traj = torchdiffeq.odeint(
-            lambda t, x: self.model.forward(x, t.expand(batch_size, self.seq_len)),
+            lambda t, x: self.model.forward(x, t.expand(batch_size).unsqueeze(-1)),
             x0,
             torch.linspace(0, 1, num_steps, device=x0.device),
             atol=self.atol,
@@ -50,7 +50,8 @@ class Prior(nn.Module):
         latents = latents.transpose(1, 2).contiguous()
         x0 = torch.randn(B, N, D, device=latents.device)
 
-        t, xt, ut = self.FM.sample_location_and_conditional_flow(x0, latents)
+        t = torch.rand(x0.shape[0], device=x0.device).unsqueeze(-1)#.expand(-1, self.seq_len)
+        t, xt, ut = self.FM.sample_location_and_conditional_flow(x0, latents, t)
 
         vt = self.model(xt, t)
         loss = torch.mean((vt - ut) ** 2)

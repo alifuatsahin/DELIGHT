@@ -5,52 +5,13 @@ import torchdiffeq  # For ODE integration
 from typing import List, Tuple, Optional, Dict, Any
 from collections import OrderedDict
 
-from modules.flows import FlowAttn, FlowBase
-from modules.layers import MLP, StandartGaussian
+from modules.flows import FlowBase
+from modules.layers import MLPGaussian, StandartGaussian
 from modules.cfm import get_CFM
-    
-class WeightsMLP(nn.Module):
-    def __init__(
-        self,
-        n_layers,
-        in_features,
-        out_features,
-        out_weight_std=0.001,
-        out_bias=0.0,
-    ):
-        super().__init__()
-        self.n_layers = n_layers
-        self.in_features = in_features
-        self.out_features = out_features
-        self.out_weight_std = out_weight_std
-        self.out_bias = out_bias
-
-        if n_layers > 0:
-            self.features = nn.Sequential()
-            for i in range(n_layers):
-                self.features.add_module('mlp{}'.format(i), nn.Linear(in_features, in_features, bias=False))
-                self.features.add_module('mlp{}_bn'.format(i), nn.BatchNorm1d(in_features))
-                self.features.add_module('mlp{}_swish'.format(i), nn.SiLU())
-
-        self.output = nn.Sequential(OrderedDict([
-            ('out_mlp0', nn.Linear(in_features, out_features, bias=True)),
-        ]))
-
-        with torch.no_grad():
-            self.output[0].weight.data.normal_(std=out_weight_std)
-            nn.init.constant_(self.output[0].bias.data, out_bias)
-
-    def forward(self, input):
-        feats = self.features(input)
-        output = self.output(feats)
-        log_weights = F.log_softmax(output, dim=-1)
-
-        return log_weights
 
 class Decoder(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        self.base = cfg.flow.base
         self.n_flows = cfg.flow.n_flows
         self.depth = cfg.flow.depth
         self.width = cfg.flow.width
@@ -63,17 +24,12 @@ class Decoder(nn.Module):
         # Validate configuration
         self._validate_config()
 
-        if self.base == 'attn':
-            self.model = FlowAttn(cfg)
-        elif self.base == 'resnet':
-            self.model = FlowBase(cfg)
-        else:
-            raise ValueError(f"Unsupported flow base type: {self.base}")
+        self.model = FlowBase(cfg)
         self.FM = get_CFM(cfg.flow)
 
         if cfg.point_prior_n_layers > 0:
             # Prior network for initial point generation
-            self.point_prior = MLP(
+            self.point_prior = MLPGaussian(
                 n_layers=cfg.point_prior_n_layers,
                 in_features=self.latent_dim,
                 out_features=cfg.input_dim,
@@ -181,7 +137,8 @@ class Decoder(nn.Module):
 
         x0 = self.reparametrize(p_prior_mus, p_prior_logvars)  # Initial point cloud
 
-        t, xt, ut = self.FM.sample_location_and_conditional_flow(x0, p)
+        t = torch.rand(x0.shape[0], x0.shape[1], device=x0.device)
+        t, xt, ut = self.FM.sample_location_and_conditional_flow(x0, p, t)
 
         vt = self.model(xt, t, context=latents)
         loss = torch.mean((vt - ut) ** 2)

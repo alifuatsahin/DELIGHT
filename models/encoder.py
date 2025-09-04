@@ -2,14 +2,6 @@ import torch
 import torch.nn as nn 
 from typing import Tuple, List, Optional
 from modules.pvcnn2 import create_pointnet2_sa_components 
-from serialization import encode
-
-def serialize(pc, grid_size=0.01, depth=16, order="z"):
-    pc_order = pc.transpose(1, 2).contiguous()
-    _, order, inverse = encode(pc_order, grid_size=grid_size, depth=depth, order=order)
-    order = order.unsqueeze(1)
-    inverse = inverse.unsqueeze(1)
-    return order, inverse
 
 class Encoder(nn.Module):
     """

@@ -6,15 +6,8 @@ import math
 from einops import repeat
 
 from .attention import TransformerBlock
-from .layers import CondResBlock, AttnBlock, ResBlock
+from .layers import CondResBlock, SpatialMLP
 from serialization import encode
-
-def serialize(pc, grid_size=0.01, depth=16, order="z"):
-    _, order, inverse = encode(pc, grid_size=grid_size, depth=depth, order=order)
-    order = order.unsqueeze(-1).expand(-1, -1, pc.shape[-1])
-    inverse = inverse.unsqueeze(-1).expand(-1, -1, pc.shape[-1])
-    return order, inverse
-
 
 def timestep_embedding(timesteps, dim, max_period=10000, repeat_only=False):
     """
@@ -46,7 +39,7 @@ class CondSequential(nn.Sequential):
 
     def forward(self, x, context):
         for layer in self:
-            if isinstance(layer, CondResBlock) or isinstance(layer, AttnBlock):
+            if isinstance(layer, CondResBlock):
                 x = layer(x, context)
             else:
                 x = layer(x)
@@ -129,57 +122,6 @@ class SpatialTransformer(nn.Module):
         x = self.proj_out(x)
         return x
 
-class FlowAttn(nn.Module):
-    def __init__(self, cfg):
-        super().__init__()
-        self.depth = cfg.flow.depth
-        self.num_res_blocks = cfg.flow.num_res_blocks
-        self.width = cfg.flow.width
-        self.n_heads = cfg.flow.n_heads
-        self.dim_head = cfg.flow.dim_head
-        self.e_dim = cfg.softvq.e_dim
-        self.input_dim = cfg.input_dim
-        self.latent_dim = cfg.latent_dim
-        self.t_emb_ch = cfg.flow.t_emb_ch
-        self.use_xformers = cfg.flow.use_xformers_attention
-
-        t_emb_dim = self.t_emb_ch * 2
-
-        self.time_embed = nn.Sequential(
-            nn.Conv1d(self.t_emb_ch, t_emb_dim, kernel_size=1),
-            nn.SiLU(),
-            nn.Conv1d(t_emb_dim, t_emb_dim, kernel_size=1),
-        )
-
-        self.to_in = nn.Conv1d(self.input_dim + t_emb_dim, self.width, kernel_size=1)
-
-        layers = []
-
-        for _ in range(self.depth):
-            layers.append(AttnBlock(
-                channels=self.width,
-                emb_channels=self.e_dim,
-                dim_head=self.dim_head,
-                n_heads=self.n_heads,
-                dropout=0.0,
-                out_channels=self.width,
-                use_xformers=self.use_xformers
-            ))
-        self.hidden_blocks = CondSequential(*layers)
-
-        self.to_out = nn.Conv1d(self.width, self.input_dim, kernel_size=1)
-
-    def forward(self, x, t, context):
-        x = x.transpose(2, 1).contiguous()
-        t_emb = timestep_embedding(t, self.t_emb_ch)
-        emb = self.time_embed(t_emb)
-        h = torch.cat([x, emb], dim=1)  # Concatenate time embedding
-        h = self.to_in(h)
-        x = self.hidden_blocks(h, context)
-        x = self.to_out(x)
-        x = x.transpose(2, 1).contiguous()
-        return x
-
 class FlowBase(nn.Module):
     def __init__(self, cfg):
         super().__init__()
@@ -213,12 +155,20 @@ class FlowBase(nn.Module):
 
         self.to_out = nn.Conv1d(self.width, self.input_dim, kernel_size=1)
 
+        self.orders = ["z", "hilbert", "hilbert-trans", "z-trans"]
+
+    def serialize(self, pc, grid_size=0.01, depth=16):
+        idx = torch.randint(len(self.orders), (1,)).item()
+        _, order, inverse = encode(pc, grid_size=grid_size, depth=depth, order=self.orders[idx])
+        order = order.unsqueeze(-1).expand(-1, -1, pc.shape[-1])
+        inverse = inverse.unsqueeze(-1).expand(-1, -1, pc.shape[-1])
+        return order, inverse
+
     def forward(self, x, t, context):
         context = context.view(context.size(0), -1).contiguous() if context.dim() > 2 else context
-        # order, inverse = serialize(x)
-        # x = torch.gather(x, 1, order).transpose(2, 1).contiguous()
-        # t = torch.gather(t, 1, order[:, :, 0]).contiguous()
-        x = x.transpose(2, 1).contiguous()
+        order, inverse = self.serialize(x)
+        x = torch.gather(x, 1, order).transpose(2, 1).contiguous()
+        t = torch.gather(t, 1, order[:, :, 0]).contiguous()
         t_emb = timestep_embedding(t, self.t_emb_ch)
         emb = self.time_embed(t_emb)
         h = torch.cat([x, emb], dim=1)  # Concatenate time embedding
@@ -226,8 +176,7 @@ class FlowBase(nn.Module):
         h = self.hidden_blocks(h, context)
         x = self.to_out(h)
         x = x.transpose(2, 1).contiguous()
-        # return torch.gather(x, 1, inverse).contiguous()
-        return x
+        return torch.gather(x, 1, inverse).contiguous()
     
 class PriorBase(nn.Module):
     def __init__(self, cfg):
@@ -237,6 +186,9 @@ class PriorBase(nn.Module):
         self.e_dim = cfg.vae.softvq.e_dim
         self.latent_dim = cfg.vae.latent_dim
         self.t_emb_ch = cfg.prior.t_emb_ch
+        self.dim_head = cfg.prior.dim_head
+        self.n_heads = cfg.prior.n_heads
+        self.use_xformers = cfg.prior.use_xformers_attention
 
         t_emb_dim = self.t_emb_ch * 2
 
@@ -245,26 +197,43 @@ class PriorBase(nn.Module):
             nn.SiLU(),
             nn.Conv1d(t_emb_dim, t_emb_dim, kernel_size=1),
         )
-        self.to_in = nn.Conv1d(self.e_dim + t_emb_dim, self.width, kernel_size=1)
+        # self.to_in = nn.Conv1d(self.e_dim + t_emb_dim, self.width, kernel_size=1)
+        self.to_in = nn.Conv1d(self.e_dim, self.width, kernel_size=1)
 
         layers = []
 
         for _ in range(self.depth):
-            layers.append(ResBlock(
+            # layers.append(SpatialMLP(
+            #     channels=self.width,
+            #     dropout=0.0,
+            #     out_channels=self.width,
+            # ))
+            layers.append(CondResBlock(
                 channels=self.width,
+                emb_channels=t_emb_dim,
                 dropout=0.0,
                 out_channels=self.width,
+                use_scale_shift_norm=True
             ))
-        self.hidden_blocks = nn.Sequential(*layers)
+            layers.append(TransformerBlock(
+                dim=self.width,
+                dim_head=self.dim_head,
+                n_heads=self.n_heads,
+                use_xformers=self.use_xformers,
+                use_pos_emb=True,
+            ))
+        self.hidden_blocks = CondSequential(*layers)
 
         self.to_out = nn.Conv1d(self.width, self.e_dim, kernel_size=1)
 
     def forward(self, x, t):
-        x = x.transpose(2, 1).contiguous()
+        x = x.transpose(1, 2).contiguous()
         t_emb = timestep_embedding(t, self.t_emb_ch)
         emb = self.time_embed(t_emb)
-        h = torch.cat([x, emb], dim=1)  # Concatenate time embedding
+        emb = emb.view(emb.size(0), -1).contiguous()
+        # h = torch.cat([x, emb], dim=1)  # Concatenate time embedding
+        h = x
         h = self.to_in(h)
-        h = self.hidden_blocks(h)
+        h = self.hidden_blocks(h, emb)
         x = self.to_out(h)
-        return x.transpose(2, 1).contiguous()
+        return x.transpose(1, 2).contiguous()

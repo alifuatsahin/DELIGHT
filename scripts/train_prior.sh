@@ -15,7 +15,7 @@ export TF_CPP_MIN_LOG_LEVEL=3
 export TF_ENABLE_ONEDNN_OPTS=0
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
-CKPT="../experiments/vae_softvq/airplane_bs32_20250825_033802/checkpoints/best_eval.pth"
+CKPT="../experiments/vae_kl/airplane_bs32_20250903_014536/checkpoints/best_eval.pth"
 NGPU=2 # 
 num_node=1
 BS=32
@@ -29,11 +29,13 @@ DEFAULT_OPTS=(
     "--opt"
     "data.batch_size" "$BS"
     "data.num_workers" "10"
-    "training.epochs" "600"
+    "training.epochs" "500"
     "training.opt.lr" "1e-4"
     "training.type" "prior"
-    "prior.depth" "4"
-    "prior.width" "512"  # Feature dimension for the flow model
+    "prior.depth" "3"
+    "prior.width" "256"  # Feature dimension for the flow model
+    "prior.dim_head" "128"  # Dimension per attention head
+    "prior.n_heads" "8"  # Number of attention heads
     "vis.vis_freq" "-50"
     "vis.save_freq" "50"
     "vis.val_freq" "25"

@@ -223,8 +223,8 @@ class ConditionalFlowMatcher:
         [1] Improving and Generalizing Flow-Based Generative Models with minibatch optimal transport, Preprint, Tong et al.
         """
         if t is None:
-            t = torch.rand(x0.shape[0], x0.shape[1], device=x0.device)
-        assert t.shape[1] == x0.shape[1], "t has to have the same dimension"
+            t = torch.rand(x0.shape[0], device=x0.device)
+        assert t.shape[0] == x0.shape[0], "t has to have the same batch dimension"
 
         eps = self.sample_noise_like(x0)
         xt = self.sample_xt(x0, x1, t, eps)
