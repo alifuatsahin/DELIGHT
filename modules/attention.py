@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from einops import rearrange
 import xformers.ops as xops
 import math
@@ -135,3 +136,65 @@ class TransformerBlock(nn.Module):
         out = self.attn(q, k, v)  # (B, C, N)
         out = self.to_out(out)
         return out
+    
+class GEGLU(nn.Module):
+    def __init__(self, dim_in, dim_out):
+        super().__init__()
+        self.proj = nn.Conv1d(dim_in, dim_out * 2, kernel_size=1)
+
+    def forward(self, x):
+        x, gate = self.proj(x).chunk(2, dim=1)
+        return x * F.gelu(gate)
+
+class FeedForward(nn.Module):
+    def __init__(self, dim, dim_out=None, mult=4, glu=False, dropout=0.):
+        super().__init__()
+        inner_dim = int(dim * mult)
+        dim_out = dim if dim_out is None else dim_out
+        project_in = nn.Sequential(
+            nn.Conv1d(dim, inner_dim, kernel_size=1),
+            nn.GELU()
+        ) if not glu else GEGLU(dim, inner_dim)
+
+        self.net = nn.Sequential(
+            project_in,
+            nn.Dropout(dropout),
+            nn.Conv1d(inner_dim, dim_out, kernel_size=1)
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+class CondTransformerBlock(nn.Module):
+    def __init__(self, dim, n_heads=4, dim_head=64, dropout=0., use_xformers=True, context_dim=None, gated_ff=True, use_pos_emb=False):
+        super().__init__()
+        self.attn1 = TransformerBlock(dim, n_heads=n_heads, dim_head=dim_head, use_xformers=use_xformers, use_pos_emb=use_pos_emb)  # is a self-attention
+        self.ff = FeedForward(dim, dropout=dropout, glu=gated_ff)
+        self.attn2 = TransformerBlock(dim, context_dim=context_dim,
+                                    n_heads=n_heads, dim_head=dim_head, use_xformers=use_xformers, use_pos_emb=use_pos_emb)  # is self-attn if context is none
+        self.norm1 = nn.GroupNorm(1, dim)
+        self.norm2 = nn.GroupNorm(1, dim)
+        self.norm3 = nn.GroupNorm(1, dim)
+
+    def forward(self, x, context=None):
+        x = self.attn1(self.norm1(x)) + x
+        x = self.attn2(self.norm2(x), context=context) + x
+        x = self.ff(self.norm3(x)) + x
+        return x
+
+class CondTransformerBlock2(nn.Module):
+    def __init__(self, dim, n_heads=4, dim_head=64, dropout=0., use_xformers=True, context_dim=None, gated_ff=True, use_pos_emb=False):
+        super().__init__()
+        self.attn1 = TransformerBlock(dim, n_heads=n_heads, dim_head=dim_head, use_xformers=use_xformers, use_pos_emb=use_pos_emb)  # is a self-attention
+        self.ff = FeedForward(dim, dropout=dropout, glu=gated_ff)
+        self.attn2 = TransformerBlock(dim, context_dim=context_dim,
+                                    n_heads=n_heads, dim_head=dim_head, use_xformers=use_xformers, use_pos_emb=use_pos_emb)  # is self-attn if context is none
+        self.norm1 = nn.GroupNorm(1, dim)
+        self.norm2 = nn.GroupNorm(1, dim)
+        self.norm3 = nn.GroupNorm(1, dim)
+
+    def forward(self, x, context=None):
+        x = self.attn1(self.norm1(x)) + x
+        x = self.attn2(self.norm2(x), context=context) + x
+        x = self.ff(self.norm3(x)) + x
+        return x

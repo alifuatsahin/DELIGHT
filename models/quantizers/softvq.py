@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn 
 import torch.nn.functional as F
 
-from modules.pvcnn2 import PointNetSAModule
+from modules.pvcnn import PointNetSAModule
 from serialization import encode
 
 class Quantizer(nn.Module):
@@ -60,7 +60,7 @@ class Quantizer(nn.Module):
         Args:
             z: Input tensor.
         """
-        features, center_xyz, _ = self.pre_quant_layer((features, xyz, None))  # Project input to codebook size
+        features, center_xyz, _ = self.pre_quant_layer(features, xyz, None)  # Project input to codebook size
         z = features.transpose(1, 2).contiguous()  # (B, D, N) -> (B, N, D)
         idx = torch.randint(len(self.orders), (1,)).item()
         _, order, _ = encode(center_xyz.transpose(1, 2).contiguous(), order=self.orders[idx])

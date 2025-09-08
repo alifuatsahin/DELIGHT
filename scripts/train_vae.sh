@@ -15,7 +15,7 @@ export TF_CPP_MIN_LOG_LEVEL=3
 export TF_ENABLE_ONEDNN_OPTS=0
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
-DATA="car" # Default category, can be overridden by command line argument
+DATA="airplane" # Default category, can be overridden by command line argument
 NGPU=2 # 
 num_node=1
 BS=32
@@ -34,7 +34,7 @@ DEFAULT_OPTS=(
     "vae.latent_dim" "1024"
     "data.n_sample_points" "2048"
     "data.categories" "$DATA"
-    "vae.quantizer" "kl"
+    "vae.quantizer" "softvq"
     "training.type" "vae"
     "vae.softvq.e_dim" "16"
     "vae.softvq.n_e" "56"
@@ -47,10 +47,11 @@ DEFAULT_OPTS=(
     "vae.flow.sigma" "0.0"  # Sigma for the flow
     "vae.flow.use_hybrid_coupling" "True"  # Whether to use hybrid coupling
     "vae.flow.blur" "0.05"  # Gaussian blur for sinkhorn regularization
-    "vae.anneal_portion" "0.4"  # Portion of epochs for annealing
+    "vae.anneal_portion" "0.5"  # Portion of epochs for annealing
     "vae.softvq.entropy_loss_ratio" "0.01"  # Ratio for entropy loss (0.01)
     "training.opt.scheduler" "cosine_anneal_nocycle"  # 'cosine_anneal', 'exponential', 'step', 'linear', 'lambda', 'cosine_anneal_nocycle'
     "vae.flow.depth" "3"  # Depth of the flow model
+    "vae.flow.width" "256"  # Feature dimension for the flow model
     "vae.softvq.learnable" "False"  # Whether to learn the temperature
 )
 

@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn 
 from typing import Tuple, List, Optional
-from modules.pvcnn2 import create_pointnet2_sa_components 
+from modules import create_pointnet2_sa_components
 
 class Encoder(nn.Module):
     """
@@ -25,7 +25,7 @@ class Encoder(nn.Module):
         sa_blocks: Optional[List] = None,
         use_attention: bool = True,
         use_se: bool = True,
-        force_attention: int = 1
+        force_attention: int = 0
     ):
         """
         Initialize the encoder.
@@ -61,7 +61,7 @@ class Encoder(nn.Module):
                 sa_blocks, 
                 extra_feature_channels, 
                 input_dim=input_dim, 
-                embed_dim=0, 
+                emb_dim=None, 
                 force_att=self.force_attention,
                 use_att=self.use_attention, 
                 with_se=self.use_se
@@ -70,8 +70,6 @@ class Encoder(nn.Module):
         self.out_features = channels_sa_features
         self.layers = nn.ModuleList(layers) 
         self.voxel_dimensions = [block[1][-1][-1] for block in self.sa_blocks]
-
-        self.orders = ["z", "hilbert", "hilbert-trans", "z-trans"]
 
         # Initialize parameters
         self._initialize_parameters()
@@ -116,7 +114,7 @@ class Encoder(nn.Module):
         
         # Pass through set abstraction layers
         for layer in self.layers:
-            features, xyz, _ = layer((features, xyz, None))
+            features, xyz, _, _ = layer(features, xyz, None)
 
         # features: (B, D, N) -> (B, D)
         return features, xyz
@@ -160,7 +158,7 @@ class Encoder(nn.Module):
         feature_maps = [features]
         
         for layer in self.layers:
-            features, xyz, _ = layer((features, xyz, None))
+            features, xyz, _, _ = layer(features, xyz, None)
             feature_maps.append(features)
         
         return feature_maps

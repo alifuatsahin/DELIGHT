@@ -497,7 +497,7 @@ class BaseTrainer(ABC):
             category_results = compute_score(
                 gen_pcs[:, :, :3].to(device).float(), 
                 ref_pcs[:, :, :3].to(device).float(), 
-                batch_size=min(50, batch_size_test),
+                batch_size_test=min(50, batch_size_test),
                 accelerated_cd=True, device_str=self.device_str,
                 visualize=True, writer=writer,
             )
