@@ -183,7 +183,7 @@ def main_worker(local_rank, args, config):
 
     if args.global_rank == 0 and not args.eval:
         logger.add(os.path.join(config.save_dir, 'train.log'))
-    elif args.eval:
+    elif args.global_rank == 0 and args.eval:
         logger.add(os.path.join(config.save_dir, 'eval_gen.log'))
 
     # Initialize distributed training if needed

@@ -5,7 +5,7 @@ import torchdiffeq  # For ODE integration
 from typing import List, Tuple, Optional, Dict, Any
 from collections import OrderedDict
 
-from modules.flows import FlowBase, ExpBase, PVCNN2Unet, Exp2Base
+from modules.flows import FlowBase, ExpBase, PVCNN2Unet, Exp2Base, Exp3Base, Exp4Base, Exp5Base
 from modules.layers import MLPGaussian, StandartGaussian
 from modules.cfm import get_CFM
 
@@ -24,16 +24,16 @@ class Decoder(nn.Module):
         # Validate configuration
         self._validate_config()
 
-        self.model = Exp2Base(cfg)
+        self.model = Exp5Base(cfg)
         # SA_BLOCKS = [ # conv_configs, sa_configs
         # ((32, 2, 32), (1024, 0.1, 32, (16, 32))),
         # ((64, 1, 16), (256, 0.2, 32, (32, 64))),
         # ((128, 1, 8), (64, 0.4, 32, (64, 128))),
-        # (None, (16, 0.8, 32, (128, 128, 128))),
+        # # (None, (16, 0.8, 32, (128, 128, 128))),
         # ]
         # FP_BLOCKS = [
         #     ((128, 128), (128, 1, 8)), # fp_configs, conv_configs
-        #     ((128, 128), (128, 1, 8)),
+        #     # ((128, 128), (128, 1, 8)),
         #     ((128, 128), (64, 1, 16)),
         #     ((128, 128, 64), (32, 2, 32)),
         # ]

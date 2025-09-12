@@ -4,7 +4,7 @@ import torch
 import third_party.pvcnn.functional as F
 from torch.amp import custom_fwd, custom_bwd
 
-from .attention import TransformerBlock, CondTransformerBlock
+from .attention import SpatialTransformerBlock, CondTransformerBlock
 
 class PointNetSequential(nn.Sequential):
     def forward(self, x, coords, emb=None, context=None, point_coords=None, point_feats=None):
@@ -190,7 +190,7 @@ class PVConv(nn.Module):
         self.voxel_layers = nn.ModuleList(voxel_layers)
         if attention:
             if context_dim is None:
-                self.attn = TransformerBlock(out_channels, dim_head=64)
+                self.attn = SpatialTransformerBlock(out_channels, dim_head=64)
             else:
                 self.attn = CondTransformerBlock(out_channels, dim_head=64, context_dim=context_dim)
         else:

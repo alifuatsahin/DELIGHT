@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 from collections import OrderedDict
-from .attention import TransformerBlock
 
 class MLPGaussian(nn.Module):
     def __init__(
@@ -160,6 +159,34 @@ class ResBlock(nn.Module):
             self.skip_connection = nn.Identity()
         else:
             self.skip_connection = nn.Conv1d(channels, self.out_channels, kernel_size=1)
+
+    def forward(self, x):
+        h = self.layers(x)
+        return self.skip_connection(x) + h
+
+class ResBlock2(nn.Module):
+    def __init__(
+        self,
+        channels,
+        dropout=0.0,
+        out_channels=None,
+    ):
+        super().__init__()
+        self.channels = channels
+        self.dropout = dropout
+        self.out_channels = out_channels or channels
+
+        self.layers = nn.Sequential(
+            nn.LayerNorm(channels),
+            nn.SiLU(),
+            nn.Dropout(p=dropout),
+            nn.Linear(channels, self.out_channels),
+        )
+
+        if self.out_channels == channels:
+            self.skip_connection = nn.Identity()
+        else:
+            self.skip_connection = nn.Linear(channels, self.out_channels)
 
     def forward(self, x):
         h = self.layers(x)

@@ -4,7 +4,6 @@ from torch import optim
 from torch.utils.tensorboard import SummaryWriter
 from loguru import logger
 import numpy as np
-import types
 import os
 
 class Writer:
@@ -187,29 +186,23 @@ def requires_grad(model, requires_grad=True):
     for p in model.parameters():
         p.requires_grad = requires_grad
 
-def init_processes(global_rank, size, args):
+def init_processes(rank, size, args):
     # Set device and initialize process group
-    if args.num_gpus >= 1:
-        torch.cuda.set_device(global_rank)  # Use rank directly for spawn
-        backend = 'nccl'
-    else:
-        backend = 'gloo'  # Fallback for CPU-only training
+    torch.cuda.set_device(rank)  # Use rank directly for spawn
+    backend = 'nccl'
         
-    if args.num_gpus > 1:
-        """ Initialize the distributed environment. """
-        os.environ['MASTER_ADDR'] = args.master_address
-        os.environ['MASTER_PORT'] = os.environ.get('MASTER_PORT', '6020')
-        logger.info('Set MASTER_ADDR: {}, MASTER_PORT: {}', os.environ['MASTER_ADDR'], os.environ['MASTER_PORT'])
+    """ Initialize the distributed environment. """
+    os.environ['MASTER_ADDR'] = args.master_address
+    os.environ['MASTER_PORT'] = os.environ.get('MASTER_PORT', '6020')
+    logger.info('Set MASTER_ADDR: {}, MASTER_PORT: {}', os.environ['MASTER_ADDR'], os.environ['MASTER_PORT'])
+    
+    try:
+        device_id = torch.device(f"cuda:{args.local_rank}")
+        dist.init_process_group(
+            backend=backend, init_method='env://', rank=rank, world_size=size, device_id=device_id)
+        logger.info('Init Process: rank={}, world_size={}', rank, size)
+    except Exception as e:
+        logger.error('Failed to initialize process group: {}', e)
+        raise
         
-        try:
-            device_id = torch.device(f"cuda:{args.local_rank}")
-            dist.init_process_group(
-                backend=backend, init_method='env://', rank=global_rank, world_size=size, device_id=device_id)
-            logger.info('Init Process: rank={}, world_size={}', global_rank, size)
-        except Exception as e:
-            logger.error('Failed to initialize process group: {}', e)
-            raise
-    else:
-        logger.info('Single GPU training, no distributed initialization needed')
-        
-    logger.info('Process initialization completed for rank {}', global_rank)
+    logger.info('Process initialization completed for rank {}', rank)

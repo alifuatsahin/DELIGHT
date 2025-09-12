@@ -81,7 +81,7 @@ class Trainer(BaseTrainer):
         logger.info('Decoder num parameters: {}', sum(p.numel() for p in self.model.decoder.parameters()))
 
         if args.distributed:
-            self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
+            self.model = nn.parallel.DistributedDataParallel(self.model, device_ids=[args.local_rank], output_device=args.local_rank)
 
         if self.use_ema and self.args.global_rank == 0:
             from utils.ema import EMA

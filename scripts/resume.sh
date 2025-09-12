@@ -15,12 +15,12 @@ export TF_CPP_MIN_LOG_LEVEL=3
 export TF_ENABLE_ONEDNN_OPTS=0
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
-NGPU=2 # 
+NGPU=1 # 
 num_node=1
 BS=32
 total_bs=$(( $NGPU * $BS ))
 
-CHECKPOINT="../experiments/vae_softvq/airplane_bs32_20250815_231921/checkpoints/snapshot.pth"
+CHECKPOINT="../experiments/vae_softvq/airplane_bs32_20250911_154520/checkpoints/snapshot.pth"
 
 # Base training command
 BASE_CMD="python train.py --num_gpus $NGPU --resume --pretrained $CHECKPOINT"

@@ -4,9 +4,9 @@ from collections import OrderedDict
 import math
 from einops import repeat
 
-from .attention import TransformerBlock, CondTransformerBlock
-from .layers import CondResBlock, ResBlock
-from .pvcnn import SharedMLP
+from .attention import SpatialTransformerBlock, CondTransformerBlock, AttentionBlock, LocalTransformerBlock, AttentionBlock2
+from .layers import CondResBlock, ResBlock, ResBlock2
+from .pvcnn import SharedMLP, PointNetSAModule, PointNetFPModule
 from serialization import encode
 from modules import create_pointnet2_fp_modules, create_pointnet2_sa_components, create_mlp_components
 
@@ -34,6 +34,22 @@ def timestep_embedding(timesteps, dim, max_period=10000, repeat_only=False):
         embedding = repeat(timesteps, 'b n -> b d n', d=dim)
     return embedding
 
+class PointSequential(nn.Sequential):
+    """
+    A sequential module that passes point cloud coordinates to the children that
+    support it as an extra input.
+    """
+
+    def forward(self, x, coords=None, context=None):
+        for layer in self:
+            if isinstance(layer, (AttentionBlock, AttentionBlock2)):
+                x = layer(x, coords, context)
+            elif isinstance(layer, LocalTransformerBlock):
+                x = layer(x, coords)
+            else:
+                x = layer(x)
+        return x
+
 class CondSequential(nn.Sequential):
     """
     A sequential module that passes timestep embeddings or context to the children that
@@ -44,42 +60,10 @@ class CondSequential(nn.Sequential):
         for layer in self:
             if isinstance(layer, CondResBlock):
                 x = layer(x, context)
-            elif isinstance(layer, CondTransformerBlock):
+            elif isinstance(layer, (CondTransformerBlock, SpatialTransformerBlock)):
                 x = layer(x, emb)
             else:
                 x = layer(x)
-        return x
-
-class SpatialTransformer(nn.Module):
-    def __init__(self, channels, out_channels, n_heads, dim_head,
-                 depth=1, dropout=0., context_dim=None, use_xformers=True):
-        super().__init__()
-        self.in_channels = channels
-        self.out_channels = out_channels if out_channels is not None else channels
-        inner_dim = n_heads * dim_head
-        self.norm = nn.GroupNorm(1, channels)
-
-        self.proj_in = nn.Conv1d(channels,
-                                 inner_dim,
-                                 kernel_size=1)
-
-        self.transformer_blocks = nn.ModuleList(
-            [CondTransformerBlock(inner_dim, n_heads, dim_head, dropout=dropout, context_dim=context_dim, use_xformers=use_xformers, use_pos_emb=False)
-                for _ in range(depth)]
-        )
-
-        self.proj_out = nn.Conv1d(inner_dim,
-                                  self.out_channels,
-                                  kernel_size=1)
-
-    def forward(self, x, context=None):
-        # note: if no context is given, cross-attention defaults to self-attention
-        x_in = x
-        x = self.norm(x)
-        x = self.proj_in(x)
-        for block in self.transformer_blocks:
-            x = block(x, context=context)
-        x = self.proj_out(x)
         return x
 
 class FlowBase(nn.Module):
@@ -170,7 +154,7 @@ class PriorBase(nn.Module):
                 out_channels=self.width,
                 use_scale_shift_norm=True
             ))
-            layers.append(TransformerBlock(
+            layers.append(SpatialTransformerBlock(
                 dim=self.width,
                 dim_head=self.dim_head,
                 n_heads=self.n_heads,
@@ -263,16 +247,16 @@ class Exp2Base(nn.Module):
         self.e_dim = cfg.softvq.e_dim
         self.latent_dim = cfg.latent_dim
         self.t_emb_ch = cfg.flow.t_emb_ch
-        self.dim_head = 32
-        self.n_heads = 4
+        self.dim_head = 64
+        self.n_heads = 8
         self.use_xformers = True
 
         t_emb_dim = self.t_emb_ch * 2
 
         self.time_embed = nn.Sequential(
-            nn.Linear(self.t_emb_ch, t_emb_dim, kernel_size=1),
+            nn.Linear(self.t_emb_ch, t_emb_dim),
             nn.SiLU(),
-            nn.Linear(t_emb_dim, t_emb_dim, kernel_size=1),
+            nn.Linear(t_emb_dim, t_emb_dim),
         )
         self.to_in = nn.Conv1d(self.input_dim + t_emb_dim, self.width, kernel_size=1)
 
@@ -313,6 +297,229 @@ class Exp2Base(nn.Module):
         x = self.hidden_blocks(x, context=emb, emb=context)
         x = self.to_out(x)
         return x.transpose(1, 2).contiguous()
+    
+class Exp3Base(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.depth = cfg.flow.depth
+        self.width = cfg.flow.width
+        self.input_dim = cfg.input_dim
+        self.e_dim = cfg.softvq.e_dim
+        self.latent_dim = cfg.latent_dim
+        self.t_emb_ch = cfg.flow.t_emb_ch
+        self.dim_head = 64
+        self.n_heads = 4
+        self.use_xformers = True
+
+        t_emb_dim = self.t_emb_ch * 2
+
+        self.time_embed = nn.Sequential(
+            nn.Linear(self.t_emb_ch, t_emb_dim),
+            nn.SiLU(),
+            nn.Linear(t_emb_dim, t_emb_dim),
+        )
+        self.to_in = nn.Linear(self.input_dim + t_emb_dim, self.width)
+
+        layers = []
+
+        for _ in range(self.depth):
+            layers.append(ResBlock2(
+                channels=self.width,
+                dropout=0.0,
+                out_channels=self.width,
+            ))
+            layers.append(AttentionBlock2(
+                dim=self.width,
+                context_dim=self.e_dim,
+                dim_head=self.dim_head,
+                n_heads=self.n_heads,
+                use_xformers=self.use_xformers,
+                use_pos_emb=True,
+            ))
+        self.hidden_blocks = PointSequential(*layers)
+
+        self.to_out = nn.Linear(self.width, self.input_dim)
+
+    def forward(self, x, t, context):
+        context = context.transpose(1, 2).contiguous()
+        coords = x[:, :, :3].contiguous()  # B N 3
+        t_emb = timestep_embedding(t, self.t_emb_ch).squeeze()
+        emb = self.time_embed(t_emb).unsqueeze(1).expand(x.size(0), x.size(1), -1).contiguous()
+        x = torch.concat([x, emb], dim=-1)  # Concatenate time embedding
+        x = self.to_in(x)
+        x = self.hidden_blocks(x, coords=coords, context=context)
+        return self.to_out(x)
+
+class Exp4Base(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.depth = cfg.flow.depth
+        self.width = cfg.flow.width
+        self.input_dim = cfg.input_dim
+        self.e_dim = cfg.softvq.e_dim
+        self.latent_dim = cfg.latent_dim
+        self.t_emb_ch = cfg.flow.t_emb_ch
+        self.dim_head = 64
+        self.n_heads = 4
+        self.use_xformers = True
+
+        t_emb_dim = self.t_emb_ch * 2
+
+        self.time_embed = nn.Sequential(
+            nn.Linear(self.t_emb_ch, t_emb_dim),
+            nn.SiLU(),
+            nn.Linear(t_emb_dim, t_emb_dim),
+        )
+        self.to_in = nn.Linear(self.input_dim + t_emb_dim, self.width)
+
+        layers = []
+
+        for _ in range(self.depth):
+            layers.append(LocalTransformerBlock(
+                dim=self.width,
+                n_heads=2,
+                dim_head=64,
+                use_pos_emb=True,
+                patch_size=16,
+            ))
+            layers.append(AttentionBlock(
+                dim=self.width,
+                context_dim=self.e_dim,
+                dim_head=self.dim_head,
+                n_heads=self.n_heads,
+                use_xformers=self.use_xformers,
+                use_pos_emb=False,
+            ))
+        self.hidden_blocks = PointSequential(*layers)
+
+        self.to_out = nn.Linear(self.width, self.input_dim)
+
+    def forward(self, x, t, context):
+        context = context.transpose(1, 2).contiguous()
+        coords = x[:, :, :3].contiguous()  # B N 3
+        t_emb = timestep_embedding(t, self.t_emb_ch).squeeze()
+        emb = self.time_embed(t_emb).unsqueeze(1).expand(x.size(0), x.size(1), -1).contiguous()
+        x = torch.concat([x, emb], dim=-1)  # Concatenate time embedding
+        x = self.to_in(x)
+        x = self.hidden_blocks(x, coords=coords, context=context)
+        return self.to_out(x)
+
+class Exp5Base(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.depth = cfg.flow.depth
+        self.width = cfg.flow.width
+        self.input_dim = cfg.input_dim
+        self.e_dim = cfg.softvq.e_dim
+        self.latent_dim = cfg.latent_dim
+        self.t_emb_ch = cfg.flow.t_emb_ch
+        self.strides = (4, 2, 2)
+        self.channel_mult = 2
+        self.dim_head = 64
+        self.n_heads = 4
+        self.use_xformers = True
+        radius = 0.1
+        seq_len = 2048
+        num_neighbors = (32, 32, 64)
+
+        t_emb_dim = self.t_emb_ch * 2
+
+        self.time_embed = nn.Sequential(
+            nn.Linear(self.t_emb_ch, t_emb_dim),
+            nn.SiLU(),
+            nn.Linear(t_emb_dim, t_emb_dim),
+        )
+        self.to_in = nn.Linear(self.input_dim + t_emb_dim, self.width)
+
+        layers = []
+
+        widths = [self.width * (self.channel_mult ** i) for i in range(self.depth)]
+        radiuses = [radius * (i + 1) for i in range(self.depth)]
+
+        for width, radius, num_neighbor, stride in zip(widths, radiuses, num_neighbors, self.strides):
+            layers.append(AttentionBlock2(
+                dim=width,
+                context_dim=self.e_dim,
+                dim_head=self.dim_head,
+                n_heads=self.n_heads,
+                use_xformers=self.use_xformers,
+                use_pos_emb=True,
+                patch_size=16,
+            ))
+            layers.append(PointNetSAModule(
+                num_centers=seq_len // stride,
+                radius=radius,
+                num_neighbors=num_neighbor,
+                in_channels=width,
+                out_channels=width * self.channel_mult,
+            ))
+        self.down_blocks = PointSequential(*layers)
+
+        self.bottleneck = AttentionBlock2(
+                dim=width * self.channel_mult,
+                context_dim=self.e_dim,
+                dim_head=self.dim_head,
+                n_heads=self.n_heads,
+                use_xformers=self.use_xformers,
+                use_pos_emb=True,
+                patch_size=16,
+            )
+
+        layers = []
+
+        for width in reversed(widths):
+            layers.append(PointNetFPModule(
+                in_channels=width * self.channel_mult + width,
+                out_channels=width,
+            ))
+            layers.append(AttentionBlock2(
+                dim=width,
+                context_dim=self.e_dim,
+                dim_head=self.dim_head,
+                n_heads=self.n_heads,
+                use_xformers=self.use_xformers,
+                use_pos_emb=True,
+                patch_size=16,
+            ))
+        self.up_blocks = PointSequential(*layers)
+
+        self.to_out = nn.Linear(self.width, self.input_dim)
+
+    def forward(self, x, t, context):
+        context = context.transpose(1, 2).contiguous()
+        coords = x[:, :, :3].contiguous()  # B N 3
+        t_emb = timestep_embedding(t, self.t_emb_ch).squeeze()
+        emb = self.time_embed(t_emb).unsqueeze(1).expand(x.size(0), x.size(1), -1).contiguous()
+        x = torch.concat([x, emb], dim=-1)  # Concatenate time embedding
+        x = self.to_in(x)
+        
+        skip_inputs = []
+        skip_coords = []
+        for layer in self.down_blocks:
+            if isinstance(layer, PointNetSAModule):
+                x = x.transpose(1, 2).contiguous()
+                coords = coords.transpose(1, 2).contiguous()
+                skip_inputs.append(x)
+                skip_coords.append(coords)
+                x, coords, _ = layer(x, coords)
+                x = x.transpose(1, 2).contiguous()
+                coords = coords.transpose(1, 2).contiguous()
+            else:
+                x = layer(x, coords=coords, context=context)
+        
+        x = self.bottleneck(x, coords=coords, context=context)
+
+        for layer in self.up_blocks:
+            if isinstance(layer, PointNetFPModule):
+                x = x.transpose(1, 2).contiguous()
+                coords = coords.transpose(1, 2).contiguous()
+                x, coords, _ = layer(x, coords, skip_inputs.pop(), skip_coords.pop())
+                x = x.transpose(1, 2).contiguous()
+                coords = coords.transpose(1, 2).contiguous()
+            else:
+                x = layer(x, coords=coords, context=context)
+
+        return self.to_out(x)
 
 class PVCNN2Unet(nn.Module):
     DEFAULT_SA_BLOCKS = [ # conv_configs, sa_configs
@@ -345,6 +552,7 @@ class PVCNN2Unet(nn.Module):
         self.sa_blocks = sa_blocks if sa_blocks is not None else self.DEFAULT_SA_BLOCKS
         self.fp_blocks = fp_blocks if fp_blocks is not None else self.DEFAULT_FP_BLOCKS
         assert extra_feature_channels >= 0
+        extra_feature_channels = emb_dim * 2
         self.emb_dim = emb_dim
         if self.emb_dim is not None: # has time embedding 
             self.embedf = nn.Sequential(
@@ -353,7 +561,7 @@ class PVCNN2Unet(nn.Module):
                 nn.Linear(2*emb_dim, 2*emb_dim),
             )
 
-        self.in_channels = extra_feature_channels + 3
+        self.in_channels = extra_feature_channels + self.input_dim
 
         sa_layers, sa_in_channels, channels_sa_features, _ = \
             create_pointnet2_sa_components(
@@ -362,7 +570,7 @@ class PVCNN2Unet(nn.Module):
             extra_feature_channels=extra_feature_channels, 
             with_se=True,
             force_att=True, 
-            emb_dim=2*emb_dim, # time embedding dim 
+            emb_dim=None, # time embedding dim 
             context_dim=context_dim,
             use_att=use_att, dropout=dropout,
             width_multiplier=width_multiplier, 
@@ -371,16 +579,16 @@ class PVCNN2Unet(nn.Module):
         self.sa_layers = nn.ModuleList(sa_layers)
 
         if use_att:
-            self.global_att = TransformerBlock(channels_sa_features, n_heads=8, dim_head=32) if context_dim is None else CondTransformerBlock(channels_sa_features, n_heads=8, dim_head=32, context_dim=context_dim)
+            self.global_att = SpatialTransformerBlock(channels_sa_features, n_heads=8, dim_head=32) if context_dim is None else CondTransformerBlock(channels_sa_features, n_heads=8, dim_head=32, context_dim=context_dim)
         else:
             self.global_att = None
 
         # only use extra features in the last fp module
-        sa_in_channels[0] = extra_feature_channels + input_dim - 3
+        # sa_in_channels[0] = extra_feature_channels + input_dim - 3
         fp_layers, channels_fp_features = create_pointnet2_fp_modules(
             fp_blocks=self.fp_blocks, in_channels=channels_sa_features, 
             sa_in_channels=sa_in_channels, force_att=True,
-            with_se=True, emb_dim=2*emb_dim, context_dim=context_dim,
+            with_se=True, emb_dim=None, context_dim=context_dim,
             use_att=use_att, dropout=dropout,
             width_multiplier=width_multiplier, voxel_resolution_multiplier=voxel_resolution_multiplier,
         )
@@ -390,7 +598,7 @@ class PVCNN2Unet(nn.Module):
                 in_channels=channels_fp_features, 
                 out_channels=[128, dropout, input_dim], # was 0.5
                 classifier=True, dim=2, width_multiplier=width_multiplier,
-                emb_dim=2*emb_dim)
+                emb_dim=None)
         self.classifier = nn.ModuleList(layers)
 
     def forward(self, x, temb=None, context=None):
@@ -401,24 +609,26 @@ class PVCNN2Unet(nn.Module):
 
         if temb is not None:
             temb = timestep_embedding(temb, self.emb_dim).squeeze()
-            temb = self.embedf(temb).unsqueeze(-1).expand(x.size(0), -1, x.size(2)).contiguous()
-            features = torch.cat([features, temb], dim=1)
+            temb = self.embedf(temb)
+            tembc = temb.unsqueeze(-1).expand(features.size(0), -1, features.size(2)).contiguous()
+            features = torch.cat([features, tembc], dim=1)
         
         coords_list, in_features_list = [], []
         for sa_blocks in self.sa_layers:
             in_features_list.append(features)
             coords_list.append(coords)
-            features, coords, temb, _ = sa_blocks (features, coords, temb, context) 
+            features, coords, _, _ = sa_blocks(features, coords, None, context) 
 
-        in_features_list[0] = x[:, 3:, :].contiguous()
+        # in_features_list[0] = x[:, 3:, :].contiguous()
         if self.global_att is not None:
             features = self.global_att(features, context=context)
         for fp_idx, fp_blocks  in enumerate(self.fp_layers):
-            features, coords, temb, _ = fp_blocks(features, coords, temb, context, point_coords=coords_list[-1-fp_idx], point_feats=in_features_list[-1-fp_idx])
+            # tembc = temb.unsqueeze(-1).expand(features.size(0), -1, features.size(2)).contiguous()
+            features, coords, _, _ = fp_blocks(features, coords, None, context, point_coords=coords_list[-1-fp_idx], point_feats=in_features_list[-1-fp_idx])
 
         for l in self.classifier:
             if isinstance(l, SharedMLP):
-                features = l(features, temb)
+                features = l(features, None)
             else:
                 features = l(features)
         return features.transpose(1, 2).contiguous()
