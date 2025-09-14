@@ -4,15 +4,13 @@ import torch.nn.functional as F
 import torchdiffeq  # For ODE integration
 from typing import List, Tuple, Optional, Dict, Any
 
-from modules.flows import UNetFlow, UNetFlow2, UNetFlow3
+from modules.flows import UNetFlow
 from modules.cfm import get_CFM
 
 class Decoder(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        self.n_flows = cfg.flow.n_flows
         self.depth = cfg.flow.depth
-        self.width = cfg.flow.width
         self.latent_dim = cfg.latent_dim
         self.input_dim = cfg.input_dim
         self.solver = cfg.flow.solver
@@ -40,9 +38,7 @@ class Decoder(nn.Module):
 
     def _validate_config(self):
         """Validate decoder configuration parameters."""
-        assert self.n_flows > 0, "Number of flows must be positive"
         assert self.depth > 0, "Depth must be positive"
-        assert self.width > 0, "Feature dimension must be positive"
         assert self.latent_dim > 0, "Latent dimension must be positive"
         assert self.input_dim > 0, "Input dimension must be positive"
 
