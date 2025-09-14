@@ -233,7 +233,7 @@ class BaseTrainer(ABC):
         """ Visualize reconstruction results """
         
         input = batch['tr_points'].to(self.device)
-        output, labels = self.eval(input)
+        output = self.eval(input)
 
         assert len(input.shape) == len(output.shape) == 3 # (B, Npoints, 3)
         assert input.shape[0] == output.shape[0]  # batch size should match
@@ -242,19 +242,16 @@ class BaseTrainer(ABC):
 
         img_list = []
         for b in range(nvis):
-            x_list, name_list, label_list = [], [], []
+            x_list, name_list = [], []
             x_list.append(output[b])
             name_list.append('Reconstruction')
 
             x_list.append(input[b])
             name_list.append('Ground Truth')
 
-            label_list.append(labels[b])
-            label_list.append(None) # No label for ground truth
-
             x_list = normalize_point_clouds(x_list)
 
-            img = visualize_point_clouds_3d(x_list, name_list, labels=label_list)
+            img = visualize_point_clouds_3d(x_list, name_list)
 
             img_list.append(img)
 
@@ -269,20 +266,17 @@ class BaseTrainer(ABC):
         n_sampled_points = self.num_points
         n_samples = 10
 
-        samples, labels = self.sample(n_sampled_points, n_samples)
+        samples = self.sample(n_sampled_points, n_samples)
 
         img_list = []
-        for idx, (sample, label) in enumerate(zip(samples, labels)):
-            x_list, name_list, label_list = [], [], []
-
+        for idx, sample in enumerate(samples):
+            x_list, name_list = [], []
             x_list.append(sample)
             name_list.append(f"Sample {idx + 1}")
 
-            label_list.append(label)
-
             x_list = normalize_point_clouds(x_list)
 
-            img = visualize_point_clouds_3d(x_list, name_list, labels=label_list)
+            img = visualize_point_clouds_3d(x_list, name_list)
 
             img_list.append(img)
 
@@ -297,7 +291,7 @@ class BaseTrainer(ABC):
     def eval_nll(self, step=None):
         device = self.device
 
-        gen_pcs, ref_pcs, label_pcs = [], [], []
+        gen_pcs, ref_pcs = [], []
 
         data_loader = self.test_loader  # Use validation loader for evaluation
 
@@ -315,7 +309,7 @@ class BaseTrainer(ABC):
             m = m.view(B, 1, -1)
             s = s.view(B, 1, -1)
 
-            gen_x, labels = self.eval(val_x)
+            gen_x = self.eval(val_x)
 
             gen_x = gen_x.cpu()
             val_x = val_x.cpu()
@@ -323,11 +317,9 @@ class BaseTrainer(ABC):
             val_x[:, :, :3] = val_x[:, :, :3] * s + m
             gen_pcs.append(gen_x.detach().cpu())
             ref_pcs.append(val_x.detach().cpu())
-            label_pcs.append(labels.detach().cpu())
 
         gen_pcs = torch.cat(gen_pcs, dim=0)
         ref_pcs = torch.cat(ref_pcs, dim=0)
-        label_pcs = torch.cat(label_pcs, dim=0)
 
         # Save
         if self.writer is not None:
@@ -335,14 +327,13 @@ class BaseTrainer(ABC):
             for i in range(10):
                 points = gen_pcs[i]
                 points = normalize_point_clouds([points])[0]
-                label_points = label_pcs[i]
-                img = visualize_point_clouds_3d([points], bound=1.0, labels=[label_points])
+                img = visualize_point_clouds_3d([points], bound=1.0)
                 img_list.append(img)
             img = np.concatenate(img_list, axis=2)
             self.writer.add_image('nll/rec', torch.as_tensor(img), step)
 
         results = compute_NLL_metric(
-            gen_pcs[:, :, :3], ref_pcs[:, :, :3], label_pcs, device, self.writer, batch_size=20, step=step)
+            gen_pcs[:, :, :3], ref_pcs[:, :, :3], device, self.writer, batch_size=20, step=step)
         score = 0
         
         for n, v in results.items():
@@ -383,7 +374,6 @@ class BaseTrainer(ABC):
         # Generate samples
         gen_pcs = []
         ref_pcs = []
-        labels_list = []
 
         # Calculate number of batches needed
         len_test_loader = num_samples // batch_size_test + 1
@@ -407,10 +397,9 @@ class BaseTrainer(ABC):
             logger.info(f'Generating batch {i+1}/{num_gen_iter}')
             
             # Generate samples using your model's sample method
-            samples, labels = self.sample(sample_num_points, batch_size_test)
+            samples = self.sample(sample_num_points, batch_size_test)
             
             gen_pcs.append(samples.detach().cpu())
-            labels_list.append(labels.detach().cpu())
         
         # Collect reference data from test loader
         ref_mean_pcs, ref_std_pcs = [], []
@@ -427,27 +416,21 @@ class BaseTrainer(ABC):
             ref_std_pcs.append(s)
 
         gen_pcs = torch.cat(gen_pcs, dim=0)
-        labels_list = torch.cat(labels_list, dim=0)
 
         # Handle distributed training
         if self.args.distributed:
             gen_pcs = gen_pcs.to(device)
-            labels_list = labels_list.to(device)
             logger.info(f'Before gather: {gen_pcs.shape}, rank={self.args.global_rank}')
             
             gen_pcs_list = [torch.zeros_like(gen_pcs) for _ in range(self.args.global_size)]
-            labels_list_gathered = [torch.zeros_like(labels_list) for _ in range(self.args.global_size)]
             dist.all_gather(gen_pcs_list, gen_pcs)
-            dist.all_gather(labels_list_gathered, labels_list)
             gen_pcs = torch.cat(gen_pcs_list, dim=0).cpu()
-            labels_list = torch.cat(labels_list_gathered, dim=0).cpu()
             
             logger.info(f'After gather: {gen_pcs.shape}, rank={self.args.global_rank}')
         
         # Concatenate all samples and normalization data
         gen_pcs = gen_pcs[:num_samples]
         ref_pcs = torch.cat(ref_pcs, dim=0)[:num_samples]
-        labels_list = labels_list[:num_samples]
         ref_mean_pcs = torch.cat(ref_mean_pcs, dim=0)[:num_samples]
         ref_std_pcs = torch.cat(ref_std_pcs, dim=0)[:num_samples]
         
@@ -483,7 +466,7 @@ class BaseTrainer(ABC):
             img_list = []
             vis_samples = gen_pcs[:8]  # Visualize first 8 samples
             norm_samples = normalize_point_clouds([s for s in vis_samples])
-            img = visualize_point_clouds_3d(norm_samples, [f'sample-{i}' for i in range(len(norm_samples))], labels=labels_list[:8])
+            img = visualize_point_clouds_3d(norm_samples, [f'sample-{i}' for i in range(len(norm_samples))])
             img_list.append(torch.as_tensor(img) / 255.0)
             
             grid = torchvision.utils.make_grid(img_list)

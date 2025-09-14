@@ -7,20 +7,19 @@ import numpy as np
 import torch
 import torchvision
 
-def pair_vis(gen_x, tr_x, labels, titles, subtitles, writer, step=-1):
+def pair_vis(gen_x, tr_x, titles, subtitles, writer, step=-1):
     img_list = []
     num_recon = len(gen_x)
     for i in range(num_recon):
         points = gen_x[i]
         points = normalize_point_clouds([tr_x[i], points])
-        point_labels = [None, labels[i]] if labels is not None else [None, None]
-        img = visualize_point_clouds_3d(points, subtitles[i], labels=point_labels)
+        img = visualize_point_clouds_3d(points, subtitles[i])
         img_list.append(torch.as_tensor(img) / 255.0)
     grid = torchvision.utils.make_grid(img_list, nrow=num_recon//2)
     if writer is not None:
         writer.add_image(titles, grid, step)
 
-def compute_NLL_metric(gen_pcs, ref_pcs, labels, device, writer=None, batch_size=200, step=-1, tag=''):
+def compute_NLL_metric(gen_pcs, ref_pcs, device, writer=None, batch_size=200, step=-1, tag=''):
     # evaluate the reconstrution results
     metrics = EMD_CD_F1(gen_pcs.to(device), ref_pcs.to(device),
                      batch_size=batch_size, accelerated_cd=True, reduced=False)
@@ -33,7 +32,7 @@ def compute_NLL_metric(gen_pcs, ref_pcs, labels, device, writer=None, batch_size
         ]
         for j in range(10)
     ]
-    pair_vis(gen_pcs[:10], ref_pcs[:10], labels[:10], titles, subtitles, writer, step=step)
+    pair_vis(gen_pcs[:10], ref_pcs[:10], titles, subtitles, writer, step=step)
     results = {}
 
     for k in metrics.keys():
@@ -41,7 +40,7 @@ def compute_NLL_metric(gen_pcs, ref_pcs, labels, device, writer=None, batch_size
         worse_ten, worse_score = indices[-10:].cpu(), sorted[-10:].cpu()
         titles = f"nll/worst-{k}-{tag}"
         subtitles = [["ori", f"gen-{k}={worse_score[j]*1e2:.2f}x1e-2"] for j in range(len(worse_score))]
-        pair_vis(gen_pcs[worse_ten], ref_pcs[worse_ten], labels[worse_ten],
+        pair_vis(gen_pcs[worse_ten], ref_pcs[worse_ten],
                  titles, subtitles, writer, step=step)
 
         metrics[k] = metrics[k].mean()

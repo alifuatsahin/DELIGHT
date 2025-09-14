@@ -99,12 +99,12 @@ class SpatialQKVAttention(nn.Module):
         _, _, M = k.shape
         assert C % self.n_heads == 0
         ch = C // self.n_heads
-        scale = 1 / math.sqrt(math.sqrt(ch))
+        scale = 1 / math.sqrt(ch)
         weight = torch.einsum(
             "bct,bcs->bts", 
-            (q * scale).reshape(B * self.n_heads, ch, N),
-            (k * scale).reshape(B * self.n_heads, ch, M),
-        ) # More stable with f16 than dividing afterwards
+            q.reshape(B * self.n_heads, ch, N),
+            k.reshape(B * self.n_heads, ch, M),
+        ) * scale # More stable with f16 than dividing afterwards
         weight = torch.softmax(weight, dim=-1)
         a = torch.einsum("bts,bcs->bct", weight, v.reshape(B * self.n_heads, ch, M))
         return a.reshape(B, -1, N)
@@ -180,13 +180,10 @@ class LocalTransformerBlock(nn.Module):
         self.orders = ["z", "hilbert", "hilbert-trans", "z-trans"]
 
     @torch.no_grad()
-    def serialize(self, pc, coords, grid_size=0.01, depth=16):
+    def serialize(self, coords, grid_size=0.01, depth=16):
         idx = torch.randint(len(self.orders), (1,)).item()
         _, order, inverse = encode(coords, grid_size=grid_size, depth=depth, order=self.orders[idx])
-        order_pc = order.unsqueeze(-1).expand(-1, -1, pc.shape[-1])
-        order_coords = order.unsqueeze(-1).expand(-1, -1, coords.shape[-1])
-        inverse = inverse.unsqueeze(-1).expand(-1, -1, pc.shape[-1])
-        return order_pc, order_coords, inverse
+        return order, inverse
 
     @torch.no_grad()
     def get_rel_pos(self, coords):
@@ -247,9 +244,9 @@ class LocalTransformerBlock(nn.Module):
 
     def forward(self, x, coords):
         B, N, C = x.shape
-        order_x, order_coords, inverse = self.serialize(x, coords)  # (B, N, C)
-        x = torch.gather(x, 1, order_x).contiguous()  # (B, N, C)
-        coords = torch.gather(coords, 1, order_coords).contiguous()  # (B, N, 3)
+        order, inverse = self.serialize(coords.contiguous())  # (B, N, C)
+        x = torch.gather(x, 1, order.unsqueeze(-1).expand(-1, -1, C)) # (B, N, C)
+        coords = torch.gather(coords, 1, order.unsqueeze(-1).expand(-1, -1, 3))  # (B, N, 3)
         x, coords = self.patchify(x, coords)  # (B * num_patches, patch_size, C)
 
         rel_pos = self.rpe(self.get_rel_pos(coords)) if self.rpe else 0
@@ -261,7 +258,7 @@ class LocalTransformerBlock(nn.Module):
         attn = self.attn(q, k, v, rel_pos=rel_pos)
         out = self.to_out(attn).view(B, -1, C)[:, :N, :]  # (B, N, C)
 
-        return torch.gather(out, 1, inverse)  # unshuffle
+        return torch.gather(out, 1, inverse.unsqueeze(-1).expand(-1, -1, C))  # unshuffle
 
 class CrossAttention(nn.Module):
     def __init__(self, dim, context_dim=None, n_heads=4, dim_head=64, use_xformers=True, use_pos_emb=False):
@@ -285,19 +282,16 @@ class CrossAttention(nn.Module):
         self.to_out = nn.Linear(inner_dim, dim)
         self.orders = ["z", "hilbert", "hilbert-trans", "z-trans"]
 
-    def serialize(self, pc, coords, grid_size=0.01, depth=16):
+    def serialize(self, coords, grid_size=0.01, depth=16):
         idx = torch.randint(len(self.orders), (1,)).item()
         _, order, inverse = encode(coords, grid_size=grid_size, depth=depth, order=self.orders[idx])
-        order_pc = order.unsqueeze(-1).expand(-1, -1, pc.shape[-1])
-        order_coords = order.unsqueeze(-1).expand(-1, -1, coords.shape[-1])
-        inverse = inverse.unsqueeze(-1).expand(-1, -1, pc.shape[-1])
-        return order_pc, order_coords, inverse
+        return order, inverse
 
     def forward(self, x, coords, context=None):
         # x: (B, N, C)
-        order_x, order_coords, inverse = self.serialize(x, coords)  # (B, N, C)
-        x = torch.gather(x, 1, order_x).contiguous()  # (B, N, C)
-        coords = torch.gather(coords, 1, order_coords).contiguous()  # (B, N, 3)
+        order, inverse = self.serialize(coords.contiguous())  # (B, N, C)
+        x = torch.gather(x, 1, order.unsqueeze(-1).expand(-1, -1, x.shape[-1]))  # (B, N, C)
+        coords = torch.gather(coords, 1, order.unsqueeze(-1).expand(-1, -1, 3))  # (B, N, 3)
         pos_emb = self.pos_emb(x) if self.pos_emb else 0
         x = x + pos_emb
         q = self.to_q(x)
@@ -310,7 +304,7 @@ class CrossAttention(nn.Module):
         k, v = kv.chunk(2, dim=-1)
         out = self.attn(q, k, v)  # (B, N, C)
         out = self.to_out(out)
-        return torch.gather(out, 1, inverse)  # unshuffle
+        return torch.gather(out, 1, inverse.unsqueeze(-1).expand(-1, -1, out.shape[-1]))  # unshuffle
 
 class QKVAttention(nn.Module):
     def __init__(self, n_heads):
@@ -382,7 +376,6 @@ class AttentionBlock(nn.Module):
     def __init__(self, dim, n_heads=4, dim_head=64, dropout=0., use_xformers=True, context_dim=None, gated_ff=True, use_pos_emb=False):
         super().__init__()
         self.attn1 = CrossAttention(dim, n_heads=n_heads, dim_head=dim_head, use_xformers=use_xformers, use_pos_emb=use_pos_emb)  # is a self-attention
-        # self.attn1 = LocalTransformerBlock(dim, n_heads=n_heads, dim_head=dim_head, use_pos_emb=use_pos_emb)  # is a self-attention
         self.ff = FeedForward(dim, dropout=dropout, glu=gated_ff)
         self.attn2 = CrossAttention(dim, context_dim=context_dim,
                                     n_heads=n_heads, dim_head=dim_head, use_xformers=use_xformers, use_pos_emb=use_pos_emb)  # is self-attn if context is none
@@ -396,10 +389,9 @@ class AttentionBlock(nn.Module):
         x = self.ff(self.norm3(x)) + x
         return x
 
-class AttentionBlock2(nn.Module):
-    def __init__(self, dim, n_heads=4, dim_head=64, dropout=0., patch_size=16,use_xformers=True, context_dim=None, gated_ff=True, use_pos_emb=False):
+class LocalAttnBlock(nn.Module):
+    def __init__(self, dim, n_heads=4, dim_head=64, dropout=0., patch_size=16, use_xformers=True, context_dim=None, gated_ff=True, use_pos_emb=False):
         super().__init__()
-        # self.attn1 = CrossAttention(dim, n_heads=n_heads, dim_head=dim_head, use_xformers=use_xformers, use_pos_emb=use_pos_emb)  # is a self-attention
         self.attn1 = LocalTransformerBlock(dim, n_heads=n_heads, dim_head=dim_head, use_pos_emb=use_pos_emb, patch_size=patch_size)  # is a self-attention
         self.ff = FeedForward(dim, dropout=dropout, glu=gated_ff)
         self.attn2 = CrossAttention(dim, context_dim=context_dim,
@@ -442,7 +434,7 @@ class SpatialFeedForward(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-class CondTransformerBlock(nn.Module):
+class SpatialAttnBlock(nn.Module):
     def __init__(self, dim, n_heads=4, dim_head=64, dropout=0., use_xformers=True, context_dim=None, gated_ff=True, use_pos_emb=False):
         super().__init__()
         self.attn1 = SpatialTransformerBlock(dim, n_heads=n_heads, dim_head=dim_head, use_xformers=use_xformers, use_pos_emb=use_pos_emb)  # is a self-attention

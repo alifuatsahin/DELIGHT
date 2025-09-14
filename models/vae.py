@@ -11,7 +11,6 @@ class VAE(nn.Module):
         super().__init__()
 
         self.latent_dim = cfg.vae.latent_dim
-        self.warmup_epochs = cfg.training.warmup
         self.training_epochs = cfg.training.epochs
 
         self.encoder = Encoder(cfg.vae.input_dim, sa_blocks=getattr(cfg.vae, 'sa_blocks', None))
@@ -60,12 +59,12 @@ class VAE(nn.Module):
             samples: decoded point clouds (B, 3, N)
             labels: labels for the generated point clouds
         """
-        samples, labels = self.decoder.decode(latent, n_sampled_points=n_sampled_points)
+        samples = self.decoder.decode(latent, n_sampled_points=n_sampled_points)
 
-        return samples, labels
+        return samples
 
     @torch.no_grad()
-    def recont(self, pc):
+    def recont(self, pc, return_trajectory=False):
         """
         Reconstruct point clouds (encode then decode).
         
@@ -82,12 +81,12 @@ class VAE(nn.Module):
         # For reconstruction, we want to use posterior mean (deterministic)
         g_sample, _, _ = self.encode(pc)
 
-        samples, labels = self.decoder.decode(g_sample, n_sampled_points)
-        
-        return samples, labels
-    
+        samples = self.decoder.decode(g_sample, n_sampled_points, return_trajectory=return_trajectory)
+
+        return samples
+
     @torch.no_grad()
-    def sample(self, n_sampled_points, n_samples=1):
+    def sample(self, n_sampled_points, n_samples=1, return_trajectory=False):
         """
         Generate new point clouds by sampling from the prior.
         
@@ -106,9 +105,9 @@ class VAE(nn.Module):
         try:
             g_sample = self.quantizer.sample(n_samples, device=self.device)
 
-            samples, labels = self.decoder.decode(g_sample, n_sampled_points)
+            samples = self.decoder.decode(g_sample, n_sampled_points, return_trajectory=return_trajectory)
 
-            return samples, labels
+            return samples
             
         finally:
             # Restore original training state
@@ -208,23 +207,13 @@ class VAE(nn.Module):
 
         entropy_loss = kl_coeff * entropy_loss
 
-        if step is not None:
-            warmup = step < (self.warmup_epochs * self.total_iter / self.training_epochs)
-        else:
-            warmup = False
-
-        recont_loss, mean_weights = self.decoder(g, latent, warmup)
+        recont_loss = self.decoder(g, latent)
 
         output = {
             "loss": recont_loss + entropy_loss,
             "recont_loss": recont_loss,
             "entropy_loss": entropy_loss,
         }
-
-        for i, mean_weight in enumerate(mean_weights):
-            output.update({
-                f"w{i+1}": mean_weight
-                })
 
         output.update(info)
 

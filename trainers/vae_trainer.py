@@ -132,15 +132,15 @@ class Trainer(BaseTrainer):
             self.model.eval()
             try:
                 if hasattr(self.model, 'module'):
-                    samples, labels = self.model.module.sample(n_sampled_points, n_samples)
+                    samples = self.model.module.sample(n_sampled_points, n_samples)
                 else:
-                    samples, labels = self.model.sample(n_sampled_points, n_samples)
+                    samples = self.model.sample(n_sampled_points, n_samples)
                 # samples = samples.permute(0, 2, 1).contiguous()  # B3N->BN3
             finally:
                 if was_training:
                     self.model.train()
 
-        return samples, labels
+        return samples
 
     @torch.no_grad()
     def eval(self, x):
@@ -155,14 +155,14 @@ class Trainer(BaseTrainer):
             self.model.eval()
             try:
                 if hasattr(self.model, 'module'):
-                    samples, labels = self.model.module.recont(x)
+                    samples = self.model.module.recont(x)
                 else:
                     # For single GPU models
-                    samples, labels = self.model.recont(x)
+                    samples = self.model.recont(x)
                 # samples = samples.permute(0, 2, 1).contiguous() # B3N -> BN3
             finally:
                 if was_training:
                     self.model.train()
 
-        return samples, labels
+        return samples
     

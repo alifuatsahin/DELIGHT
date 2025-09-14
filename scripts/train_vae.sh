@@ -18,7 +18,7 @@ export TORCH_DISTRIBUTED_DEBUG=DETAIL
 DATA="airplane" # Default category, can be overridden by command line argument
 NGPU=1 # 
 num_node=1
-BS=32 # Batch size per GPU
+BS=64 # Batch size per GPU
 total_bs=$(( $NGPU * $BS ))
 
 # Base training command
@@ -29,7 +29,7 @@ DEFAULT_OPTS=(
     "--opt"
     "data.batch_size" "$BS"
     "data.num_workers" "10"
-    "training.epochs" "600"
+    "training.epochs" "1000"
     "training.opt.lr" "1e-4"
     "vae.latent_dim" "1024"
     "data.n_sample_points" "2048"
@@ -37,10 +37,9 @@ DEFAULT_OPTS=(
     "vae.quantizer" "softvq"
     "training.type" "vae"
     "vae.softvq.e_dim" "8"
-    "vae.softvq.n_e" "128"
+    "vae.softvq.n_e" "256"
     "vae.softvq.num_codebooks" "128"
     "vae.anneal_kl" "True"
-    "vae.point_prior_n_layers" "0"
     "vae.softvq.l2_norm" "True"
     "training.opt.ema" "True"
     "vae.flow.cfm_method" "variance"  # Conditional Flow Matcher method ('ot', 'target', 'schrodinger_bridge', 'independent', 'variance')
@@ -50,9 +49,10 @@ DEFAULT_OPTS=(
     "vae.anneal_portion" "0.5"  # Portion of epochs for annealing
     "vae.softvq.entropy_loss_ratio" "0.01"  # Ratio for entropy loss (0.01)
     "training.opt.scheduler" "cosine_anneal_nocycle"  # 'cosine_anneal', 'exponential', 'step', 'linear', 'lambda', 'cosine_anneal_nocycle'
-    "vae.flow.depth" "3"  # Depth of the flow model
-    "vae.flow.width" "48"  # Feature dimension for the flow model
     "vae.softvq.learnable" "False"  # Whether to learn the temperature
+    "vae.flow.patch_size" "32"
+    # "data.normalize_per_shape" "True"
+    # "data.normalize_global" "False"  # Normalize point clouds globally
 )
 
 # Combine base command with default options and any additional arguments

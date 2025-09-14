@@ -25,7 +25,7 @@ class Encoder(nn.Module):
         sa_blocks: Optional[List] = None,
         use_attention: bool = True,
         use_se: bool = True,
-        force_attention: int = 0
+        force_attention: int = 1
     ):
         """
         Initialize the encoder.

@@ -3,10 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchdiffeq  # For ODE integration
 from typing import List, Tuple, Optional, Dict, Any
-from collections import OrderedDict
 
-from modules.flows import FlowBase, ExpBase, PVCNN2Unet, Exp2Base, Exp3Base, Exp4Base, Exp5Base
-from modules.layers import MLPGaussian, StandartGaussian
+from modules.flows import UNetFlow, UNetFlow2, UNetFlow3
 from modules.cfm import get_CFM
 
 class Decoder(nn.Module):
@@ -24,45 +22,22 @@ class Decoder(nn.Module):
         # Validate configuration
         self._validate_config()
 
-        self.model = Exp5Base(cfg)
-        # SA_BLOCKS = [ # conv_configs, sa_configs
-        # ((32, 2, 32), (1024, 0.1, 32, (16, 32))),
-        # ((64, 1, 16), (256, 0.2, 32, (32, 64))),
-        # ((128, 1, 8), (64, 0.4, 32, (64, 128))),
-        # # (None, (16, 0.8, 32, (128, 128, 128))),
-        # ]
-        # FP_BLOCKS = [
-        #     ((128, 128), (128, 1, 8)), # fp_configs, conv_configs
-        #     # ((128, 128), (128, 1, 8)),
-        #     ((128, 128), (64, 1, 16)),
-        #     ((128, 128, 64), (32, 2, 32)),
-        # ]
-        # self.model = PVCNN2Unet(emb_dim=cfg.flow.t_emb_ch,
-        #                         context_dim=cfg.softvq.e_dim, 
-        #                         input_dim=self.input_dim,
-        #                         extra_feature_channels=0, 
-        #                         sa_blocks=SA_BLOCKS, 
-        #                         fp_blocks=FP_BLOCKS)
-        
+        self.model = UNetFlow(
+            depth=cfg.flow.depth,
+            widths=cfg.flow.widths,
+            radiuses=cfg.flow.radiuses,
+            input_dim=cfg.input_dim,
+            e_dim=cfg.softvq.e_dim,
+            t_emb_ch=cfg.flow.t_emb_ch,
+            patch_size=cfg.flow.patch_size,
+            num_centers=cfg.flow.num_centers,
+            n_heads=cfg.flow.n_heads,
+            num_neighbors=cfg.flow.num_neighbors,
+            use_xformers=cfg.flow.use_xformers,
+        )
+
         self.FM = get_CFM(cfg.flow)
 
-        if cfg.point_prior_n_layers > 0:
-            # Prior network for initial point generation
-            self.point_prior = MLPGaussian(
-                n_layers=cfg.point_prior_n_layers,
-                in_features=self.latent_dim,
-                out_features=cfg.input_dim,
-                mu_weight_std=0.001,
-                mu_bias=0.0,
-                deterministic=False,
-                logvar_weight_std=0.01,
-                logvar_bias=0.0
-            )
-        else:
-            self.point_prior = StandartGaussian(
-                out_features=cfg.input_dim
-            )
-        
     def _validate_config(self):
         """Validate decoder configuration parameters."""
         assert self.n_flows > 0, "Number of flows must be positive"
@@ -70,29 +45,6 @@ class Decoder(nn.Module):
         assert self.width > 0, "Feature dimension must be positive"
         assert self.latent_dim > 0, "Latent dimension must be positive"
         assert self.input_dim > 0, "Input dimension must be positive"
-
-    def get_weights(
-        self, 
-        latent_vector: torch.Tensor, 
-        warmup: bool = False
-    ) -> torch.Tensor:
-        """
-        Get the mixture weights for the decoder flows.
-        Args:
-            latent_vector: latent features (B, latent_dim)
-            warmup: whether to use fixed uniform weights
-            
-        Returns:
-            mixture_weights: weights for each flow (B, n_flows)
-        """
-        if warmup:
-            batch_size = latent_vector.shape[0]
-            log_weights = torch.log(torch.full((batch_size, self.n_flows), 1.0 / self.n_flows, device=latent_vector.device))
-            return log_weights
-        else:
-            # Use learned weights based on latent vector
-            log_weights = self.mixture_weights_enc(latent_vector)
-            return log_weights
 
     def reparametrize(
         self, 
@@ -117,52 +69,41 @@ class Decoder(nn.Module):
         latents: torch.Tensor, 
         n_sampled_points: int,
         num_steps: int = 100,
+        return_trajectory: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         B = latents.shape[0]
 
-        p_prior_mus, p_prior_logvars = self.point_prior(latents.view(B, -1))
-
-        # Expand prior parameters to match point dimensions
-        p_prior_mus = p_prior_mus.unsqueeze(1).expand(B, n_sampled_points, self.input_dim)
-        p_prior_logvars = p_prior_logvars.unsqueeze(1).expand(B, n_sampled_points, self.input_dim)
-
-        x0 = self.reparametrize(p_prior_mus, p_prior_logvars)  # Initial point cloud
+        x0 = torch.randn(B, n_sampled_points, self.input_dim, device=latents.device).float()  # Initial point cloud
 
         traj = torchdiffeq.odeint(
-            lambda t, x: self.model.forward(x, t.expand(x.shape[0], 1), context=latents),
+            lambda t, x: self.model.forward(x, t.expand(x.shape[0]), context=latents),
             x0,
             torch.linspace(0, 1, num_steps, device=x0.device),
             atol=self.atol,
             rtol=self.rtol,
             method=self.solver,
         )
-
-        return traj[-1], torch.ones(latents.shape[0], n_sampled_points, device=latents.device)
+        if return_trajectory:
+            return traj
+        return traj[-1]
 
     def forward(
         self, 
         p: torch.Tensor, 
         latents: torch.Tensor, 
-        warmup: bool = False
     ) -> Tuple[torch.Tensor, torch.Tensor]:
 
         B, N, C = p.shape
 
-        p_prior_mus, p_prior_logvars = self.point_prior(latents.view(latents.shape[0], -1), warmup=warmup)
+        x0 = torch.randn(B, N, C, device=p.device).float()  # Initial point cloud
 
-        # Expand prior parameters to match point dimensions
-        p_prior_mus = p_prior_mus.unsqueeze(1).expand(B, N, C)
-        p_prior_logvars = p_prior_logvars.unsqueeze(1).expand(B, N, C)
-
-        x0 = self.reparametrize(p_prior_mus, p_prior_logvars)  # Initial point cloud
-
-        t = torch.rand(x0.shape[0], device=x0.device).unsqueeze(-1)
+        t = torch.rand(x0.shape[0], device=x0.device)
         t, xt, ut = self.FM.sample_location_and_conditional_flow(x0, p, t)
 
         vt = self.model(xt, t, context=latents)
         loss = torch.mean((vt - ut) ** 2)
 
-        return loss, [1]  # Placeholder for flow labels, replace with actual labels if needed
+        return loss
     
     def estimate_parameters(self) -> Dict[str, int]:
         """

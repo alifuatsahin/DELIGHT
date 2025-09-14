@@ -5,7 +5,7 @@ import torchdiffeq  # For ODE integration
 from typing import Tuple, Dict
 
 from modules.cfm import get_CFM
-from modules.flows import PriorBase
+from modules.flows import PriorFlow
 
 class Prior(nn.Module):
     def __init__(self, cfg):
@@ -18,7 +18,7 @@ class Prior(nn.Module):
         self.atol = cfg.prior.atol
         self.rtol = cfg.prior.rtol
 
-        self.model = PriorBase(cfg)
+        self.model = PriorFlow(cfg)
         self.FM = get_CFM(cfg.prior)
 
     def sample(
