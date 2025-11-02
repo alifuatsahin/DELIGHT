@@ -93,10 +93,10 @@ class VAE(nn.Module):
         Args:
             n_sampled_points: number of points per generated cloud
             n_samples: number of point clouds to generate
-            device: device to generate samples on (defaults to model device)
-            s
+            return_trajectory: whether to return the full trajectory
+            
         Returns:
-            Tuple of (prior_output, samples, labels, mixture_weights)
+            Generated point cloud samples
         """            
         # Set deterministic mode for consistent evaluation
         was_training = self.training
@@ -139,8 +139,8 @@ class VAE(nn.Module):
             n_sampled_points = pc1.shape[2]
 
         # Encode both point clouds
-        latent1 = self.encode(pc1)['g_posterior_samples']
-        latent2 = self.encode(pc2)['g_posterior_samples']
+        latent1, _, _ = self.encode(pc1)
+        latent2, _, _ = self.encode(pc2)
         
         # Create interpolation weights
         alphas = torch.linspace(0, 1, n_steps, device=latent1.device)
@@ -151,7 +151,7 @@ class VAE(nn.Module):
             latent_interp = (1 - alpha) * latent1 + alpha * latent2
             
             # Decode interpolated latent
-            samples, _, _ = self.decoder.decode(latent_interp, n_sampled_points)
+            samples = self.decoder.decode(latent_interp, n_sampled_points)
             interpolated_clouds.append(samples)
             
         return interpolated_clouds
@@ -162,8 +162,7 @@ class VAE(nn.Module):
         trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
         
         encoder_params = sum(p.numel() for p in self.encoder.parameters())
-        decoder_params = sum(p.numel() for p in self.decoder.parameters()) 
-        prior_params = sum(p.numel() for p in self.latent_prior.parameters())
+        decoder_params = sum(p.numel() for p in self.decoder.parameters())
         posterior_params = sum(p.numel() for p in self.quantizer.parameters())
         
         return {
@@ -171,7 +170,6 @@ class VAE(nn.Module):
             'trainable_parameters': trainable_params,
             'encoder_parameters': encoder_params,
             'decoder_parameters': decoder_params,
-            'prior_flow_parameters': prior_params,
             'posterior_parameters': posterior_params,
             'latent_dim': self.latent_dim,
             'model_device': str(next(self.parameters()).device)

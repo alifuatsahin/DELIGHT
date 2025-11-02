@@ -1,0 +1,36 @@
+# Core dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.23.0
+scipy>=1.10.0
+
+# Deep learning utilities
+einops>=0.6.0
+torchinfo>=1.8.0
+torchdiffeq>=0.2.0
+
+# Optimal transport and geometry
+geomloss>=0.2.5
+pykeops>=2.1.0
+
+# Point cloud processing
+open3d>=0.17.0
+plyfile>=0.9.0
+
+# Image and rendering
+Pillow>=9.0.0
+matplotlib>=3.6.0
+mitsuba>=3.3.0
+OpenEXR>=3.1.0
+Imath>=3.1.0
+
+# Data and ML utilities
+pandas>=1.5.0
+scikit-learn>=1.2.0
+loguru>=0.7.0
+
+# Configuration
+yacs>=0.1.8
+
+# Evaluation metrics
+trimesh>=3.20.0
