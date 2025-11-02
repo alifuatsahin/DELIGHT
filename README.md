@@ -2,6 +2,8 @@
 
 A PyTorch implementation of DELIGHT, a method for high-quality 3D shape generation using compressed latent diffusion models with Vector Quantized Variational Autoencoders (VQ-VAE) and Denoising Diffusion Probabilistic Models (DDPM).
 
+📚 **[Complete Documentation](DOCUMENTATION.md)** | 🚀 **[Quick Start](QUICKSTART.md)** | 🏗️ **[Architecture](ARCHITECTURE.md)** | ❓ **[FAQ](FAQ.md)**
+
 ## Overview
 
 DELIGHT combines:
