@@ -1,3 +1,13 @@
+"""Simple inference example for DELIGHT DDPM model.
+
+This script demonstrates how to:
+1. Initialize a DDPM model
+2. Prepare input data
+3. Run a forward pass
+
+For training, use train.py instead.
+"""
+
 from models import VAE, DDPM
 from default_config import cfg
 

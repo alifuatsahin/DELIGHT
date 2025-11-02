@@ -1,3 +1,12 @@
+"""Utility functions for DELIGHT training and logging.
+
+This module provides utilities for:
+- TensorBoard logging with distributed training support
+- Optimizer and scheduler creation
+- Distributed training initialization
+- Random seed setting
+"""
+
 import torch
 import torch.distributed as dist
 from torch import optim
@@ -7,7 +16,18 @@ import numpy as np
 import types
 import os
 
+
 class Writer:
+    """TensorBoard writer wrapper with distributed training support.
+    
+    Only initializes TensorBoard writer on rank 0 to avoid conflicts
+    in distributed training.
+    
+    Args:
+        rank: Process rank in distributed training (0 for single GPU)
+        save: Directory to save TensorBoard logs
+    """
+    
     def __init__(self, rank, save=None):
         self.rank = rank
         self.meter_dict = {}  # Initialize meter dictionary
@@ -58,6 +78,16 @@ class Writer:
 
 
 def init(rank, seed=0, save_dir=None):
+    """Initialize training environment with random seeds and writer.
+    
+    Args:
+        rank: Process rank for distributed training
+        seed: Random seed for reproducibility
+        save_dir: Directory to save TensorBoard logs
+        
+    Returns:
+        Writer: TensorBoard writer instance
+    """
     logger.info('[INIT] at rank={}, seed={}', rank, seed)
     torch.manual_seed(rank + seed)
     np.random.seed(rank + seed)
@@ -71,6 +101,11 @@ def init(rank, seed=0, save_dir=None):
     return writer
 
 class AverageMeter:
+    """Computes and stores the average and current value.
+    
+    Useful for tracking training metrics over batches/epochs.
+    """
+    
     def __init__(self):
         self.val = 0
         self.avg = 0
@@ -90,6 +125,22 @@ class AverageMeter:
         self.avg = self.sum / self.count if self.count > 0 else 0
 
 def get_opt(params, cfgopt, other_cfg=None):
+    """Create optimizer and learning rate scheduler.
+    
+    Supports various optimizers (Adam, AdamW) and schedulers (exponential,
+    step, linear, cosine annealing, etc.).
+    
+    Args:
+        params: Model parameters to optimize
+        cfgopt: Optimizer configuration from config
+        other_cfg: Additional configuration (needed for some schedulers)
+        
+    Returns:
+        tuple: (optimizer, scheduler)
+        
+    Raises:
+        ValueError: If unsupported optimizer or scheduler type is specified
+    """
     # Create optimizer
     if cfgopt.type == 'adam':
         optimizer = optim.Adam(params,
@@ -189,6 +240,19 @@ def get_opt(params, cfgopt, other_cfg=None):
     return optimizer, scheduler
 
 def init_processes(global_rank, size, args):
+    """Initialize distributed training process group.
+    
+    Sets up NCCL backend for multi-GPU training or Gloo for CPU training.
+    Configures MASTER_ADDR and MASTER_PORT for communication.
+    
+    Args:
+        global_rank: Global rank of the process
+        size: Total number of processes (world size)
+        args: Arguments containing distributed training configuration
+        
+    Raises:
+        Exception: If process group initialization fails
+    """
     # Set device and initialize process group
     if args.num_gpus >= 1:
         torch.cuda.set_device(global_rank)  # Use rank directly for spawn

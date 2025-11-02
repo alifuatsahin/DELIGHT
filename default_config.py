@@ -1,3 +1,13 @@
+"""Default configuration for DELIGHT training.
+
+This module defines the default configuration structure using YACS (Yet Another Configuration System).
+Configuration can be overridden through:
+1. YAML config files (--config)
+2. Command-line arguments (--opt)
+
+See configs/example_config.yaml for a complete configuration example.
+"""
+
 from third_party.yacs_config import CfgNode as CN
 
 cfg = CN()
