@@ -1,0 +1,44 @@
+# Core dependencies for DELIGHT
+# Deep Compression Latent Diffusion for Generation of High-quality Three-dimensional shapes
+
+# Deep Learning Framework
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Point Cloud and 3D Processing
+open3d>=0.17.0
+trimesh>=3.23.0
+
+# Scientific Computing
+numpy>=1.24.0
+scipy>=1.10.0
+scikit-learn>=1.3.0
+h5py>=3.9.0
+
+# Image Processing
+Pillow>=10.0.0
+opencv-python>=4.8.0
+
+# Machine Learning Utilities
+einops>=0.7.0
+xformers>=0.0.20
+
+# Logging and Progress
+loguru>=0.7.0
+tqdm>=4.65.0
+
+# Configuration Management
+pyyaml>=6.0
+
+# Visualization
+matplotlib>=3.7.0
+
+# Spherical Harmonics (if using torch-harmonics)
+torch-harmonics>=0.6.0
+
+# Note: The following third-party modules are included in the repository:
+# - ChamferDistancePytorch (custom CUDA implementation)
+# - PyTorchEMD (Earth Mover's Distance)
+# - pvcnn (Point-Voxel CNN)
+# - torchdiffeq (Differential equations solver)
+# These require separate compilation. See installation instructions in README.md

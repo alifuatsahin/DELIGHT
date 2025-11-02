@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  lint-and-format:
+    name: Lint and Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install black flake8 isort mypy
+
+      - name: Check code formatting with black
+        run: |
+          black --check --line-length=100 --exclude='third_party/|build/|dist/' .
+
+      - name: Check import sorting with isort
+        run: |
+          isort --check-only --profile black --line-length=100 --skip third_party --skip build --skip dist .
+
+      - name: Lint with flake8
+        run: |
+          flake8 . --exclude=third_party,build,dist --max-line-length=100 --extend-ignore=E203,W503,E501 --max-complexity=15 --count --statistics
+
+  test:
+    name: Test on Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.8', '3.9', '3.10', '3.11']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt || true
+          pip install pytest pytest-cov
+
+      - name: Test imports
+        run: |
+          python -c "import torch; print('PyTorch:', torch.__version__)"
+          python -c "import default_config; print('Config loaded successfully')"
+
+      - name: Syntax check
+        run: |
+          python -m py_compile main.py train.py default_config.py
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install bandit safety
+
+      - name: Run Bandit security scan
+        run: |
+          bandit -r . -x ./third_party,./tests,./build,./dist -f json -o bandit-report.json || true
+          bandit -r . -x ./third_party,./tests,./build,./dist
+
+      - name: Check for known vulnerabilities with Safety
+        run: |
+          pip install -r requirements.txt || true
+          safety check --json || true

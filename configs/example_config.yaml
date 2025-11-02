@@ -1,0 +1,120 @@
+# Example configuration for training DELIGHT VAE on ShapeNet chairs
+# This is a complete working example that you can modify for your needs
+
+# Experiment settings
+exp_name: ''  # Leave empty to auto-generate from timestamp and settings
+save_dir: ''  # Will be set automatically based on exp_name
+
+# VAE Configuration
+vae:
+  latent_dim: 512                # Dimension of the latent space
+  input_dim: 3                   # Input dimension (3 for 3D point clouds)
+  n_flows: 4                     # Number of normalizing flow layers
+  depth: 15                      # Depth of the encoder network
+  feat_dim: 32                   # Feature dimension in the encoder
+  point_prior_n_layers: 1        # Number of layers in point prior
+  weight_n_layers: 3             # Number of layers in weight network
+  quantizer: softvq              # Quantization method: 'softvq' or 'kl'
+  
+  # KL annealing (if using KL-based quantization)
+  anneal_kl: false               # Whether to anneal KL weight
+  max_kl_coeff: 0.5             # Maximum KL coefficient
+  min_kl_coeff: 1e-7            # Minimum KL coefficient
+  constant_portion: 0.0         # Portion of training with constant KL
+  anneal_portion: 0.5           # Portion of training for annealing
+  kl_weight: 1.0                # Weight for KL loss
+  
+  # High-frequency reconstruction loss
+  high_freq_recon_coeff: 0.0    # Coefficient for high-freq loss (0 to disable)
+  high_freq_recon_lmax: 50      # Maximum degree for spherical harmonics
+  
+  # Soft Vector Quantization settings
+  softvq:
+    n_e: 56                      # Number of embedding vectors per codebook
+    e_dim: 8                     # Dimension of each embedding
+    num_codebooks: 64            # Number of codebooks (total latent = e_dim * num_codebooks)
+    learnable: true              # Learn temperature parameter
+    tau_min: 0.03               # Minimum temperature
+    tau_max: 0.3                # Maximum temperature
+    tau: 0.07                   # Initial temperature
+    entropy_loss_ratio: 100     # Weight for entropy regularization
+    show_usage: true            # Track and log codebook usage
+    l2_norm: true               # Normalize embeddings to unit sphere
+
+# DDPM Configuration (for latent diffusion)
+ddpm:
+  model_channels: 256           # Base channel dimension
+  num_res_blocks: 3             # Number of residual blocks per resolution
+  attention_resolutions: [2, 4, 8]  # Resolutions where attention is applied
+  dropout: 0.0                  # Dropout rate
+  channel_mult: [1, 2, 4, 4]    # Channel multipliers per resolution
+  conv_resample: true           # Use convolution for up/downsampling
+  dims: 1                       # Dimensionality (1 for 1D sequences)
+  num_classes: -1               # Number of classes (-1 for no conditioning)
+  use_checkpoint: false         # Use gradient checkpointing (saves memory)
+  num_heads: 4                  # Number of attention heads
+  num_head_channels: -1         # Channels per head (-1 to use num_heads)
+  num_heads_upsample: -1        # Attention heads in upsampling
+  use_scale_shift_norm: false   # Use scale-shift normalization
+  resblock_updown: false        # Use residual blocks for up/downsampling
+  use_xformers_attention: true  # Use memory-efficient attention
+  
+  # Diffusion process settings
+  parameterization: eps         # Prediction target: 'eps' (noise) or 'x0' (data)
+  original_elbo_weight: 0.0     # Weight for ELBO loss term
+  l_simple_weight: 1.0          # Weight for simplified loss
+  learn_logvar: false           # Learn log variance
+  logvar_init: 0.0             # Initial log variance
+  loss_type: l2                 # Loss function: 'l1' or 'l2'
+  beta_schedule: linear         # Noise schedule: 'linear', 'cosine', etc.
+  timesteps: 1000              # Number of diffusion steps
+  v_posterior: 0.0             # Posterior variance interpolation
+  clip_denoised: true          # Clip predicted x0 to valid range
+  log_every_t: 100             # Logging frequency during sampling
+
+# Data Configuration
+data:
+  dataset: ShapeNetCore.v2      # Dataset name
+  categories: chair             # ShapeNet category(ies) to use
+  n_sample_points: 2048         # Number of points to sample per shape
+  data_dir: ./ShapeNet          # Path to dataset directory
+  batch_size: 32                # Batch size for training
+  batch_size_test: 32           # Batch size for evaluation
+  num_workers: 10               # Number of data loading workers
+  train_drop_last: 1            # Drop last incomplete batch
+  
+  # Data augmentation and normalization
+  random_subsample: true        # Randomly subsample points each epoch
+  sample_with_replacement: true # Sample with replacement
+  normalize_per_shape: false    # Normalize each shape independently
+  normalize_shape_box: false    # Normalize to unit bounding box
+  normalize_global: false       # Normalize using global statistics
+  normalize_std_per_axis: false # Normalize std per axis
+  normalize_range: false        # Scale to [-1, 1] range
+  recenter_per_shape: true      # Center each shape at origin
+  dataset_scale: 1.0           # Overall scale factor
+
+# Training Configuration
+training:
+  epochs: 500                   # Total number of training epochs
+  warmup: 10                    # Warmup epochs for mixture weights
+  type: vae                     # Training type: 'vae' or 'ddpm'
+  
+  # Optimizer settings
+  opt:
+    type: adamw                 # Optimizer: 'adam', 'adamw', 'sgd'
+    lr: 0.0001                  # Learning rate
+    beta1: 0.9                  # Adam beta1
+    beta2: 0.999                # Adam beta2
+    weight_decay: 0.01          # Weight decay
+    ema: true                   # Use exponential moving average
+    ema_decay: 0.9999          # EMA decay rate
+    scheduler: step             # LR scheduler: 'step', 'cosine_anneal', etc.
+
+# Visualization and Logging
+vis:
+  log_freq: -1                  # Logging frequency (-1 to disable)
+  vis_freq: -50                 # Visualization frequency
+  save_freq: 400                # Checkpoint saving frequency (epochs)
+  val_freq: 25                  # Validation frequency (epochs)
+  save_time: 30                 # Auto-save interval in minutes

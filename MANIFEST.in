@@ -1,0 +1,32 @@
+# Include documentation files
+include README.md
+include LICENSE
+include CONTRIBUTING.md
+include CODE_OF_CONDUCT.md
+include CHANGELOG.md
+
+# Include configuration files
+include requirements.txt
+include requirements-dev.txt
+include pyproject.toml
+include setup.py
+
+# Include example configurations
+recursive-include configs *.yaml *.yml
+
+# Include scripts
+recursive-include scripts *.sh *.py
+
+# Exclude third-party code (installed separately)
+prune third_party
+
+# Exclude development and temporary files
+prune tests
+prune docs/_build
+exclude .gitignore
+exclude .gitattributes
+exclude .pre-commit-config.yaml
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude *.so
+global-exclude .DS_Store
