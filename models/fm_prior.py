@@ -45,7 +45,7 @@ class Prior(nn.Module):
         latents: torch.Tensor, 
     ) -> Tuple[torch.Tensor, Dict]:
 
-        B, D, N = latents.shape
+        B, N, D = latents.shape
 
         latents = latents.transpose(1, 2).contiguous()
         x0 = torch.randn(B, N, D, device=latents.device)

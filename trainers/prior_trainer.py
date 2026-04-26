@@ -148,13 +148,13 @@ class Trainer(BaseTrainer):
                     latents = self.model.sample(batch_size=n_samples)
 
                 # Decode the latents using the VAE
-                samples, labels = self.vae.decode(latents, n_sampled_points=n_sampled_points)
+                samples = self.vae.decode(latents, n_sampled_points=n_sampled_points)
                 # output = samples.permute(0, 2, 1).contiguous()  # B3N->BN3
             finally:
                 if was_training:
                     self.model.train()
 
-        return samples, labels
+        return samples
 
     @torch.no_grad()
     def eval(self, x):
@@ -165,7 +165,7 @@ class Trainer(BaseTrainer):
             x: input point clouds
         """
         # For reconstruction evaluation, typically use current weights to measure training progress
-        samples, labels = self.vae.recont(x)
+        samples = self.vae.recont(x)
         # samples = samples.permute(0, 2, 1).contiguous() # B3N -> BN3
 
-        return samples, labels
+        return samples

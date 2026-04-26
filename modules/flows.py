@@ -4,7 +4,7 @@ from collections import OrderedDict
 import math
 from einops import repeat
 
-from .attention import LocalAttnBlock, AttentionBlock
+from .attention import LocalAttnBlock, PriorTransformerBlock
 from .pvcnn import PointNetSAModule, PointNetFPModule
 
 def timestep_embedding(timesteps, dim, max_period=10000, repeat_only=False):
@@ -151,24 +151,138 @@ class UNetFlow(nn.Module):
 
         return self.to_out(x)
     
+# class PriorFlow(nn.Module):
+#     def __init__(self, cfg):
+#         super().__init__()
+#         self.depth = cfg.flow.depth
+#         self.width = cfg.flow.width
+#         self.input_dim = cfg.input_dim
+#         self.e_dim = cfg.softvq.e_dim
+#         self.latent_dim = cfg.latent_dim
+#         self.t_emb_ch = cfg.flow.t_emb_ch
+#         self.strides = (4, 2, 2)
+#         self.channel_mult = 2
+#         self.dim_head = 64
+#         self.n_heads = 4
+#         self.use_xformers = True
+#         radius = 0.1
+#         seq_len = 2048
+#         num_neighbors = (32, 32, 64)
+
+#         t_emb_dim = self.t_emb_ch * 2
+
+#         self.time_embed = nn.Sequential(
+#             nn.Linear(self.t_emb_ch, t_emb_dim),
+#             nn.SiLU(),
+#             nn.Linear(t_emb_dim, t_emb_dim),
+#         )
+#         self.to_in = nn.Linear(self.input_dim + t_emb_dim, self.width)
+
+#         layers = []
+
+#         widths = [self.width * (self.channel_mult ** i) for i in range(self.depth)]
+#         radiuses = [radius * (i + 1) for i in range(self.depth)]
+
+#         for width, radius, num_neighbor, stride in zip(widths, radiuses, num_neighbors, self.strides):
+#             layers.append(LocalAttnBlock(
+#                 dim=width,
+#                 context_dim=self.e_dim,
+#                 dim_head=self.dim_head,
+#                 n_heads=self.n_heads,
+#                 use_xformers=self.use_xformers,
+#                 use_pos_emb=True,
+#                 patch_size=16,
+#             ))
+#             layers.append(PointNetSAModule(
+#                 num_centers=seq_len // stride,
+#                 radius=radius,
+#                 num_neighbors=num_neighbor,
+#                 in_channels=width,
+#                 out_channels=width * self.channel_mult,
+#             ))
+#         self.down_blocks = nn.Sequential(*layers)
+
+#         self.bottleneck = LocalAttnBlock(
+#                 dim=width * self.channel_mult,
+#                 context_dim=self.e_dim,
+#                 dim_head=self.dim_head,
+#                 n_heads=self.n_heads,
+#                 use_xformers=self.use_xformers,
+#                 use_pos_emb=True,
+#                 patch_size=16,
+#             )
+
+#         layers = []
+
+#         for width in reversed(widths):
+#             layers.append(PointNetFPModule(
+#                 in_channels=width * self.channel_mult + width,
+#                 out_channels=width,
+#             ))
+#             layers.append(LocalAttnBlock(
+#                 dim=width,
+#                 context_dim=self.e_dim,
+#                 dim_head=self.dim_head,
+#                 n_heads=self.n_heads,
+#                 use_xformers=self.use_xformers,
+#                 use_pos_emb=True,
+#                 patch_size=16,
+#             ))
+#         self.up_blocks = nn.Sequential(*layers)
+
+#         self.to_out = nn.Linear(self.width, self.input_dim)
+
+#     def forward(self, x, t):
+#         coords = x[:, :, :3].contiguous()  # B N 3
+#         t_emb = timestep_embedding(t, self.t_emb_ch).squeeze()
+#         emb = self.time_embed(t_emb).unsqueeze(1).expand(x.size(0), x.size(1), -1).contiguous()
+#         x = torch.concat([x, emb], dim=-1)  # Concatenate time embedding
+#         x = self.to_in(x)
+        
+#         skip_inputs = []
+#         skip_coords = []
+#         for layer in self.down_blocks:
+#             if isinstance(layer, PointNetSAModule):
+#                 x = x.transpose(1, 2).contiguous()
+#                 coords = coords.transpose(1, 2).contiguous()
+#                 skip_inputs.append(x)
+#                 skip_coords.append(coords)
+#                 x, coords, _ = layer(x, coords)
+#                 x = x.transpose(1, 2).contiguous()
+#                 coords = coords.transpose(1, 2).contiguous()
+#             else:
+#                 x = layer(x, coords=coords)
+        
+#         x = self.bottleneck(x, coords=coords)
+
+#         for layer in self.up_blocks:
+#             if isinstance(layer, PointNetFPModule):
+#                 x = x.transpose(1, 2).contiguous()
+#                 coords = coords.transpose(1, 2).contiguous()
+#                 x, coords, _ = layer(x, coords, skip_inputs.pop(), skip_coords.pop())
+#                 x = x.transpose(1, 2).contiguous()
+#                 coords = coords.transpose(1, 2).contiguous()
+#             else:
+#                 x = layer(x, coords=coords)
+
+#         return self.to_out(x)
+
 
 class PriorFlow(nn.Module):
+    """
+    Transformer-based flow model for the latent prior.
+    Operates on abstract token sequences.
+    """
     def __init__(self, cfg):
         super().__init__()
-        self.depth = cfg.flow.depth
-        self.width = cfg.flow.width
-        self.input_dim = cfg.input_dim
-        self.e_dim = cfg.softvq.e_dim
-        self.latent_dim = cfg.latent_dim
-        self.t_emb_ch = cfg.flow.t_emb_ch
-        self.strides = (4, 2, 2)
-        self.channel_mult = 2
-        self.dim_head = 64
-        self.n_heads = 4
-        self.use_xformers = True
-        radius = 0.1
-        seq_len = 2048
-        num_neighbors = (32, 32, 64)
+        # All config from cfg.prior — no cfg.vae keys needed here
+        self.depth = cfg.prior.depth
+        self.width = cfg.prior.width
+        self.e_dim = cfg.vae.softvq.e_dim       # token dimension = input/output dim
+        self.t_emb_ch = cfg.prior.t_emb_ch
+        self.n_heads = cfg.prior.n_heads
+        self.dim_head = cfg.prior.dim_head
+        self.use_xformers = cfg.prior.use_xformers
 
         t_emb_dim = self.t_emb_ch * 2
 
@@ -177,93 +291,39 @@ class PriorFlow(nn.Module):
             nn.SiLU(),
             nn.Linear(t_emb_dim, t_emb_dim),
         )
-        self.to_in = nn.Linear(self.input_dim + t_emb_dim, self.width)
 
-        layers = []
+        # Project (e_dim + time_emb) -> width
+        self.to_in = nn.Linear(self.e_dim + t_emb_dim, self.width)
 
-        widths = [self.width * (self.channel_mult ** i) for i in range(self.depth)]
-        radiuses = [radius * (i + 1) for i in range(self.depth)]
-
-        for width, radius, num_neighbor, stride in zip(widths, radiuses, num_neighbors, self.strides):
-            layers.append(LocalAttnBlock(
-                dim=width,
-                context_dim=self.e_dim,
-                dim_head=self.dim_head,
+        self.blocks = nn.ModuleList([
+            PriorTransformerBlock(
+                dim=self.width,
                 n_heads=self.n_heads,
-                use_xformers=self.use_xformers,
-                use_pos_emb=True,
-                patch_size=16,
-            ))
-            layers.append(PointNetSAModule(
-                num_centers=seq_len // stride,
-                radius=radius,
-                num_neighbors=num_neighbor,
-                in_channels=width,
-                out_channels=width * self.channel_mult,
-            ))
-        self.down_blocks = nn.Sequential(*layers)
-
-        self.bottleneck = LocalAttnBlock(
-                dim=width * self.channel_mult,
-                context_dim=self.e_dim,
                 dim_head=self.dim_head,
-                n_heads=self.n_heads,
                 use_xformers=self.use_xformers,
-                use_pos_emb=True,
-                patch_size=16,
             )
+            for _ in range(self.depth)
+        ])
 
-        layers = []
+        # Project back to token dimension
+        self.to_out = nn.Linear(self.width, self.e_dim)
 
-        for width in reversed(widths):
-            layers.append(PointNetFPModule(
-                in_channels=width * self.channel_mult + width,
-                out_channels=width,
-            ))
-            layers.append(LocalAttnBlock(
-                dim=width,
-                context_dim=self.e_dim,
-                dim_head=self.dim_head,
-                n_heads=self.n_heads,
-                use_xformers=self.use_xformers,
-                use_pos_emb=True,
-                patch_size=16,
-            ))
-        self.up_blocks = nn.Sequential(*layers)
+    def forward(self, x, t):
+        """
+        Args:
+            x: noisy latent tokens (B, seq_len, e_dim)
+            t: time (B,) or (B, 1)
+        Returns:
+            velocity field (B, seq_len, e_dim)
+        """
+        t = t.view(t.shape[0])  # ensure (B,)
+        t_emb = timestep_embedding(t, self.t_emb_ch)               # (B, t_emb_ch)
+        emb = self.time_embed(t_emb).unsqueeze(1).expand(-1, x.size(1), -1)  # (B, N, t_emb_dim)
 
-        self.to_out = nn.Linear(self.width, self.input_dim)
+        x = torch.cat([x, emb], dim=-1)   # (B, N, e_dim + t_emb_dim)
+        x = self.to_in(x)                 # (B, N, width)
 
-    def forward(self, x, t, context):
-        coords = x[:, :, :3].contiguous()  # B N 3
-        t_emb = timestep_embedding(t, self.t_emb_ch).squeeze()
-        emb = self.time_embed(t_emb).unsqueeze(1).expand(x.size(0), x.size(1), -1).contiguous()
-        x = torch.concat([x, emb], dim=-1)  # Concatenate time embedding
-        x = self.to_in(x)
-        
-        skip_inputs = []
-        skip_coords = []
-        for layer in self.down_blocks:
-            if isinstance(layer, PointNetSAModule):
-                x = x.transpose(1, 2).contiguous()
-                coords = coords.transpose(1, 2).contiguous()
-                skip_inputs.append(x)
-                skip_coords.append(coords)
-                x, coords, _ = layer(x, coords)
-                x = x.transpose(1, 2).contiguous()
-                coords = coords.transpose(1, 2).contiguous()
-            else:
-                x = layer(x, coords=coords, context=context)
-        
-        x = self.bottleneck(x, coords=coords, context=context)
+        for block in self.blocks:
+            x = block(x)
 
-        for layer in self.up_blocks:
-            if isinstance(layer, PointNetFPModule):
-                x = x.transpose(1, 2).contiguous()
-                coords = coords.transpose(1, 2).contiguous()
-                x, coords, _ = layer(x, coords, skip_inputs.pop(), skip_coords.pop())
-                x = x.transpose(1, 2).contiguous()
-                coords = coords.transpose(1, 2).contiguous()
-            else:
-                x = layer(x, coords=coords, context=context)
-
-        return self.to_out(x)
+        return self.to_out(x)             # (B, N, e_dim)

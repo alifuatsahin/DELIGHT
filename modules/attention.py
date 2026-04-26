@@ -472,3 +472,23 @@ class RPE(torch.nn.Module):
         out = out.permute(0, 3, 1, 2)  # (N, K, K, H) -> (N, H, K, K)
         return out
         
+class PriorTransformerBlock(nn.Module):
+    """A single transformer block for the latent prior: self-attention + FFN, no geometry."""
+    def __init__(self, dim, n_heads, dim_head, use_xformers=True):
+        super().__init__()
+        inner_dim = n_heads * dim_head
+        self.norm1 = nn.LayerNorm(dim)
+        self.norm2 = nn.LayerNorm(dim)
+        self.to_qkv = nn.Linear(dim, 3 * inner_dim)
+        self.to_out = nn.Linear(inner_dim, dim)
+        self.ff = FeedForward(dim, glu=True)
+        self.attn = EfficientQKVAttention(n_heads) if use_xformers else QKVAttention(n_heads)
+
+    def forward(self, x):
+        # x: (B, N, D)
+        h = self.norm1(x)
+        qkv = self.to_qkv(h)
+        q, k, v = qkv.chunk(3, dim=-1)
+        x = x + self.to_out(self.attn(q, k, v))
+        x = x + self.ff(self.norm2(x))
+        return x
