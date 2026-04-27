@@ -10,7 +10,7 @@ module load anaconda/Python-ML-2025a
 module load cuda/12.2
 module load nccl/2.23.4-cuda12.2
 
-export TORCH_CUDA_ARCH_LIST="7.0"
+export TORCH_CUDA_ARCH_LIST="12.0"
 export TF_CPP_MIN_LOG_LEVEL=3
 export TF_ENABLE_ONEDNN_OPTS=0
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
