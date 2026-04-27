@@ -1,6 +1,6 @@
 # DELIGHT: Design Exploration via Latent Inference for Generating High-quality Topologies
 
-A state-of-the-art generative model for high-quality 3D point cloud generation using Variational Autoencoders (VAE) with advanced quantization and conditional flow matching techniques.
+A generative model for high-quality 3D point cloud generation using Variational Autoencoders (VAE) with advanced quantization and conditional flow matching techniques.
 
 ## 📋 Table of Contents
 
@@ -109,9 +109,8 @@ gcc --version  # Linux
 ```
 DELIGHT/
 ├── data/                           # Data directory
-│   ├── sampling.py                 # Point cloud sampling utilities
-│   ├── ShapeNetCore.v2/            # ShapeNet dataset
-│   └── ShapeNetCore.v2.PC15k/      # Pre-sampled point clouds
+│   ├── pasta_equations.ipynb       # Mathematical equations for pasta shapes
+│   └── ShapeNetCore.v2.PC15k/      # Pre-sampled point clouds (including the custom pasta dataset)
 ├── models/                         # Core model components
 │   ├── vae.py                      # Main VAE model
 │   ├── encoder.py                  # Point cloud encoder
@@ -127,6 +126,8 @@ DELIGHT/
 │   ├── cfm.py                      # Conditional flow matching
 │   ├── flows.py                    # Flow-based models
 │   └── layers.py                   # Custom layers
+├── pyansys/                        # Ansys simulation scripts (Licensed ANSYS 25.2+ required)
+│   ├── run_sim.py                  # Simulation script
 ├── datasets/                       # Data loading utilities
 │   ├── dataset.py                  # Dataset classes
 │   ├── preprocessing.py            # Data preprocessing
@@ -161,6 +162,7 @@ DELIGHT/
 ├── main.py                         # Inference/sampling script
 ├── train.py                        # Main training entry point
 ├── default_config.py               # Default configuration
+└── LICENSE                         # LICENSE file
 └── README.md                       # This file
 ```
 
