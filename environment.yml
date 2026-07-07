@@ -1,0 +1,47 @@
+# DELIGHT -- Linux only.
+name: delight
+channels:
+  - conda-forge
+  - nvidia
+dependencies:
+  - python=3.11
+  - pip
+  - cuda-toolkit=12.8
+  - libffi
+  - openssl
+  - pip:
+    - --extra-index-url https://download.pytorch.org/whl/cu128
+    - torch==2.11.0
+    - torchvision==0.26.0
+    - torchaudio==2.11.0
+    - torchdiffeq==0.2.5      # ODE solvers for the decoder and prior flows
+    - einops==0.8.2
+    - numpy==2.3.3
+    - scipy==1.16.2
+    - scikit-learn==1.8.0     # utils/eval_metrics.py (JSD, 1-NNA)
+    - pandas==3.0.2           # datasets/dataset.py
+    - pyyaml==6.0.3
+    - pydantic==2.10.5
+    - loguru==0.7.3
+    - tqdm==4.67.1
+    - ninja==1.13.0           # required by the JIT extension build
+    - tensorboard==2.20.0     # utils/utils.py Writer
+    - matplotlib==3.10.9
+    - geomloss==0.2.6
+    - pykeops==2.3
+    - keopscore==2.3
+    - trimesh==4.12.1
+    - pymeshlab==2025.7.post1
+    - plyfile==1.1.3
+    - open3d==0.19.0
+    - mitsuba==3.8.0
+    - drjit==1.3.1
+    - plotly==6.7.0
+    - Pillow
+    - OpenEXR
+
+    # -- optional: dataset generation (data/sampling.py) --
+    # - meshlib
+
+    # -- optional: pyansys/run_sim.py, needs a licensed ANSYS 25.2+ install --
+    # - ansys-fluent-core
